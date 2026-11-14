@@ -2,3 +2,17 @@
 
 thoughts/
 scripts/
+
+# Dependencies
+node_modules/
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Local usage data: Claude Code transcripts, a history.jsonl or a stats-cache.json copied here
+# by mistake. Every fixture is made up, and lives in test/fixtures/.
+*.jsonl
+!test/fixtures/*.jsonl
+stats-cache.json

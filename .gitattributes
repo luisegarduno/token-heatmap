@@ -1,0 +1,6 @@
+# The fixtures are compared byte for byte, and the bundle is compared with a fresh build, so a
+# checkout keeps LF on every platform.
+* text=auto eol=lf
+*.cmd text eol=crlf
+
+plugin/dist/cli.mjs linguist-generated=true
