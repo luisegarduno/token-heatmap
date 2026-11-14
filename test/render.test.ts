@@ -46,7 +46,7 @@ type Cell = { level: number; title: string }
 const LINK =
   /<a href="token-heatmap\/history\.jsonl"(?: title="([^"]*)")? tabindex="-1"><img src="token-heatmap\/([a-z0-9-]+)\.svg" width="(\d+)" height="(\d+)"(?: hspace="(\d+)")? align="top" alt=""><\/a>/g
 const FRAME =
-  /^<table><tr><td nowrap>\n(<b>[^<]*<\/b> Claude Code tokens? in the last year)<br>\n<kbd>(.*)<\/kbd>\n<\/td><\/tr><\/table>$/s
+  /^<table align="center"><tr><td nowrap>\n(<b>[^<]*<\/b> Claude Code tokens? in the last year)<br>\n<kbd>(.*)<\/kbd>\n<\/td><\/tr><\/table>$/s
 const WEEKDAY_LABELS = ["gap-30x14", "mon", "gap-30x14", "wed", "gap-30x14", "fri", "gap-30x14"]
 const LEGEND = ["gap-158x14", "gap-158x14", "gap-158x14", "gap-158x14", "less", "0", "1", "2", "3", "4", "more"]
 const GRID_WIDTH = 772
@@ -126,9 +126,9 @@ function monthRowFor(firstSunday: number): string[] {
 }
 
 // GitHub kept these in Phase 1's test, and removed `style`, `class`, inline <svg> and data:
-// addresses. `hspace` was measured there too.
+// addresses. `hspace` was measured there too, and `align` on <table> on 2026-11-14.
 const KEPT: Record<string, readonly string[]> = {
-  table: [],
+  table: ["align"],
   tr: [],
   td: ["nowrap"],
   b: [],

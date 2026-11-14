@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- A heatmap of daily Claude Code token usage in a GitHub profile README: the last 12 months, one square per day, five levels by quartile, month labels, a legend and the year's total, legible in GitHub's light and dark themes.
+- A heatmap of daily Claude Code token usage in a GitHub profile README, centered: the last 12 months, one square per day, five levels by quartile, month labels, a legend and the year's total, legible in GitHub's light and dark themes.
 - A tooltip on each day in desktop browsers, such as `96.4M tokens on June 10th.`
 - `/token-heatmap:setup`: shows what it will publish, model names included, then clones the profile repository, imports the history still on the machine, and pushes the heatmap in one commit by `token-heatmap[bot]`. Options `--no-models`, `--models`, `--timezone ZONE` and `--adopt ID`.
 - Hooks on `SessionStart`, `Stop` and `SessionEnd` that sync at most once an hour while Claude Code is in use, and at a session's end once 5 minutes have passed, in a detached process.

@@ -96,7 +96,7 @@ export function render(history: readonly HistoryLine[], today: string): string {
   const rows = [monthRow(first, Math.ceil(totals.length / 7)), ...WEEKDAY_FILES.map(weekdayRow), holdRow(), legendRow()]
 
   return (
-    `<table><tr><td nowrap>\n<b>${short(total, 2)}</b> Claude Code ${total === 1 ? "token" : "tokens"} in the last year<br>\n` +
+    `<table align="center"><tr><td nowrap>\n<b>${short(total, 2)}</b> Claude Code ${total === 1 ? "token" : "tokens"} in the last year<br>\n` +
     `<kbd>${rows.join("<br\n>")}</kbd>\n</td></tr></table>`
   )
 }
