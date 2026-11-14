@@ -175,7 +175,7 @@ claude plugin marketplace remove token-heatmap
 
 The hooks stop: in new sessions at once, and in sessions that are already open at the start of their next turn. The turn in progress may make one last hook call, which finds no setup and writes nothing. The uninstall deletes the data directory, with `config.json`, `state.json` and the clone.
 
-That leaves what was published. In your profile repository, delete the lines from `<!-- token-heatmap:start -->` to `<!-- token-heatmap:end -->` in `README.md` and the `token-heatmap/` folder, and commit. Earlier commits still hold them; rewriting your repository's history is up to you.
+That leaves what was published. In your profile repository, delete the lines from `<!-- token-heatmap:start -->` to `<!-- token-heatmap:end -->` in `README.md`, and the blank line above them if setup added the markers, then the `token-heatmap/` folder, and commit. Earlier commits still hold them; rewriting your repository's history is up to you.
 
 If you install it again later, setup finds your old machine id in `history.jsonl` and stops. Run it with `--adopt ID` to go on with your recorded days.
 
