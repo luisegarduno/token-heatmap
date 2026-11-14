@@ -58,6 +58,9 @@ const IMAGES = new Map<string, readonly [number, number]>([
   ["more", [34, 14]],
 ])
 
+/** The file name of every image a block can use, such as "0.svg": what setup copies to token-heatmap/. */
+export const IMAGE_FILES: readonly string[] = [...IMAGES.keys()].map((file) => `${file}.svg`)
+
 /** The grid is 772 px wide: 30 for the weekday labels and 53 columns of 14. */
 const GRID_WIDTH = 772
 

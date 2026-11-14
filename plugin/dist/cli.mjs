@@ -1,11 +1,96 @@
 // src/cli.ts
-import { readFileSync as readFileSync2 } from "node:fs";
+import { readFileSync as readFileSync3 } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+
+// src/config.ts
+import { randomInt } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+var KEYS = ["repository", "timeZone", "machine", "models"];
+var REPOSITORY = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
+var MACHINE_ID = /^[a-z0-9]{1,32}$/;
+var ConfigError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ConfigError";
+  }
+};
+var configPath = (dataDir) => join(dataDir, "config.json");
+function readConfig(dataDir) {
+  const path = configPath(dataDir);
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw new ConfigError(`${path} does not exist. Run /token-heatmap:setup in Claude Code first`);
+    }
+    throw new ConfigError(`cannot read ${path}: ${error.message}`);
+  }
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new ConfigError(`${path}: not JSON`);
+  }
+  const problem = checkConfig(value);
+  if (problem) throw new ConfigError(`${path}: ${problem}`);
+  const { repository, timeZone, machine, models } = value;
+  return { repository, timeZone, machine, models };
+}
+function writeConfig(dataDir, config) {
+  const { repository, timeZone, machine, models } = config;
+  const problem = checkConfig({ repository, timeZone, machine, models });
+  if (problem) throw new ConfigError(`config.json not written: ${problem}`);
+  mkdirSync(dataDir, { recursive: true });
+  const path = configPath(dataDir);
+  const next = `${path}.${process.pid}.tmp`;
+  writeFileSync(next, `${JSON.stringify({ repository, timeZone, machine, models }, null, 2)}
+`);
+  renameSync(next, path);
+}
+function checkConfig(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "not a JSON object";
+  for (const key of Object.keys(value)) {
+    if (!KEYS.includes(key)) return `unknown key ${JSON.stringify(key)}`;
+  }
+  const { repository, timeZone, machine, models } = value;
+  if (typeof repository !== "string" || !REPOSITORY.test(repository)) {
+    return "repository is not a GitHub repository written USER/USER";
+  }
+  if (typeof timeZone !== "string" || !isTimeZone(timeZone)) {
+    return "timeZone is not an IANA time zone such as America/Los_Angeles";
+  }
+  if (typeof machine !== "string" || !MACHINE_ID.test(machine))
+    return "machine is not an id of lowercase letters and digits";
+  if (typeof models !== "boolean") return "models is not true or false";
+  return void 0;
+}
+function newMachineId() {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let id = "";
+  for (let i = 0; i < 6; i++) id += alphabet[randomInt(alphabet.length)];
+  return id;
+}
+function isTimeZone(zone) {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+var canonicalTimeZone = (zone) => new Intl.DateTimeFormat("en-US", { timeZone: zone }).resolvedOptions().timeZone;
+function machineTimeZone() {
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return typeof zone === "string" && zone !== "" && isTimeZone(zone) ? canonicalTimeZone(zone) : void 0;
+}
 
 // src/providers/claude-code.ts
 import { open, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 
 // src/providers/provider.ts
 var TOKEN_TYPES = ["input", "output", "cache_write", "cache_read"];
@@ -54,7 +139,7 @@ function localDate(instant, timeZone) {
   return `${part("year").padStart(4, "0")}-${part("month")}-${part("day")}`;
 }
 function parseHistory(text) {
-  const lines = [];
+  const lines2 = [];
   const firstLine = /* @__PURE__ */ new Map();
   text.replace(/^﻿/, "").split("\n").forEach((raw, index) => {
     const n = index + 1;
@@ -75,12 +160,12 @@ function parseHistory(text) {
       );
     }
     firstLine.set(key, n);
-    lines.push(line);
+    lines2.push(line);
   });
-  return lines;
+  return lines2;
 }
-function formatHistory(lines) {
-  return [...lines].sort((a, b) => compare(a.date, b.date) || compare(a.provider, b.provider) || compare(a.machine, b.machine)).map(({ date, provider, machine, tokens, models }) => {
+function formatHistory(lines2) {
+  return [...lines2].sort((a, b) => compare(a.date, b.date) || compare(a.provider, b.provider) || compare(a.machine, b.machine)).map(({ date, provider, machine, tokens, models }) => {
     const line = { date, provider, machine, tokens: ordered(tokens) };
     if (models) {
       line.models = Object.fromEntries(
@@ -92,20 +177,20 @@ function formatHistory(lines) {
   }).join("");
 }
 function merge(history, records, machine) {
-  const lines = [...history];
-  const index = new Map(lines.map((line, i) => [keyOf(line), i]));
+  const lines2 = [...history];
+  const index = new Map(lines2.map((line, i) => [keyOf(line), i]));
   for (const record of records) {
     const recorded = record.models ? { date: record.date, provider: record.provider, machine, ...splitByModel(Object.entries(record.models)) } : { date: record.date, provider: record.provider, machine, tokens: ordered(record.tokens) };
     const key = keyOf(recorded);
     const i = index.get(key);
     if (i === void 0) {
-      index.set(key, lines.length);
-      lines.push(recorded);
+      index.set(key, lines2.length);
+      lines2.push(recorded);
     } else {
-      lines[i] = mergeLine(lines[i], recorded);
+      lines2[i] = mergeLine(lines2[i], recorded);
     }
   }
-  return lines;
+  return lines2;
 }
 function mergeLine(line, recorded) {
   if (line.models && recorded.models) {
@@ -209,7 +294,7 @@ function claudeCode(opts = {}) {
   };
 }
 function projectsDir() {
-  return join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
+  return join2(process.env.CLAUDE_CONFIG_DIR || join2(homedir(), ".claude"), "projects");
 }
 var isGone = (error) => error?.code === "ENOENT";
 async function transcriptFiles(root) {
@@ -223,7 +308,7 @@ async function transcriptFiles(root) {
       throw error;
     }
     for (const entry of entries) {
-      const path = join(dir, entry.name);
+      const path = join2(dir, entry.name);
       if (entry.isDirectory()) await walk(path);
       else if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(path);
     }
@@ -378,6 +463,7 @@ var IMAGES = new Map([
   ["less", [36, 14]],
   ["more", [34, 14]]
 ]);
+var IMAGE_FILES = [...IMAGES.keys()].map((file) => `${file}.svg`);
 var GRID_WIDTH = 772;
 var MS_PER_DAY = 864e5;
 var dayOf = (iso) => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) / MS_PER_DAY;
@@ -410,15 +496,15 @@ function image(file, title, hspace) {
 }
 function monthRow(first, columns) {
   const month = (column) => dateOf(first + 7 * column).getUTCMonth();
-  let row = image("gap-30x16");
+  let row2 = image("gap-30x16");
   for (let c = 0; c < columns; ) {
     let run2 = 1;
     while (c + run2 < columns && month(c + run2) === month(c)) run2++;
-    if (run2 === 1) row += image("gap-14x16");
-    else row += image(MONTH_FILES[month(c)]) + (run2 > 2 ? image(`gap-${14 * (run2 - 2)}x16`) : "");
+    if (run2 === 1) row2 += image("gap-14x16");
+    else row2 += image(MONTH_FILES[month(c)]) + (run2 > 2 ? image(`gap-${14 * (run2 - 2)}x16`) : "");
     c += run2;
   }
-  return row;
+  return row2;
 }
 var holdRow = () => image("gap-2x2", void 0, (GRID_WIDTH - 2) / 2);
 var legendRow = () => image("gap-158x14").repeat(4) + image("less") + [0, 1, 2, 3, 4].map((level) => image(String(level))).join("") + image("more");
@@ -448,73 +534,71 @@ function short(n, decimals) {
   return `${q / scale}.${String(q % scale).padStart(decimals, "0")}${letter}`;
 }
 
-// src/config.ts
-import { readFileSync } from "node:fs";
-import { join as join2 } from "node:path";
-var KEYS = ["repository", "timeZone", "machine", "models"];
-var ConfigError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "ConfigError";
-  }
-};
-var configPath = (dataDir) => join2(dataDir, "config.json");
-function readConfig(dataDir) {
-  const path = configPath(dataDir);
-  let text;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      throw new ConfigError(`${path} does not exist. Run /token-heatmap:setup in Claude Code first`);
-    }
-    throw new ConfigError(`cannot read ${path}: ${error.message}`);
-  }
-  const problem = (what) => new ConfigError(`${path}: ${what}`);
-  let value;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    throw problem("not JSON");
-  }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw problem("not a JSON object");
-  for (const key of Object.keys(value)) {
-    if (!KEYS.includes(key)) throw problem(`unknown key ${JSON.stringify(key)}`);
-  }
-  const { repository, timeZone, machine, models } = value;
-  if (typeof repository !== "string" || !/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(repository)) {
-    throw problem("repository is not a GitHub repository written USER/USER");
-  }
-  if (typeof timeZone !== "string" || !isTimeZone(timeZone)) {
-    throw problem("timeZone is not an IANA time zone such as America/Los_Angeles");
-  }
-  if (typeof machine !== "string" || !/^[a-z0-9]{1,32}$/.test(machine)) {
-    throw problem("machine is not an id of lowercase letters and digits");
-  }
-  if (typeof models !== "boolean") throw problem("models is not true or false");
-  return { repository, timeZone, machine, models };
-}
-function isTimeZone(zone) {
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: zone });
-    return true;
-  } catch {
-    return false;
-  }
-}
+// src/setup.ts
+import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
+import { join as join4 } from "node:path";
 
 // src/publish/git-readme.ts
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync as mkdirSync2, readdirSync, rmdirSync, rmSync, statSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join3 } from "node:path";
 var BOT = { name: "token-heatmap[bot]", email: "token-heatmap[bot]@users.noreply.github.com" };
 var COMMIT_MESSAGE = "Update token heatmap [skip ci]";
 var README = "README.md";
-var HISTORY2 = "token-heatmap/history.jsonl";
-async function publish(dataDir, update) {
+var FOLDER = "token-heatmap";
+var HISTORY2 = `${FOLDER}/history.jsonl`;
+var addresses = (repository) => ({ https: `https://github.com/${repository}.git`, ssh: `git@github.com:${repository}.git` });
+function isAddressOf(url, repository) {
+  const name = repository.toLowerCase();
+  const bare = url.trim().toLowerCase().replace(/\/+$/, "").replace(/\.git$/, "");
+  return [`https://github.com/${name}`, `git@github.com:${name}`, `ssh://git@github.com/${name}`].includes(bare);
+}
+async function clone(dataDir, repository, opts = {}) {
+  const repo = join3(dataDir, "repo");
+  const env = gitEnv();
+  if (existsSync(repo) && statSync(repo).isDirectory() && readdirSync(repo).length === 0) rmdirSync(repo);
+  if (existsSync(repo)) {
+    const origin = existsSync(join3(repo, ".git")) ? await run(repo, ["config", "--get", "remote.origin.url"], env) : void 0;
+    const url = origin?.code === 0 ? origin.stdout.trim() : "";
+    if (url !== "" && isAddressOf(url, repository)) return { address: url, kept: true };
+    if (url === "" || opts.replaces === void 0 || !isAddressOf(url, opts.replaces)) {
+      throw new Error(
+        `${repo} is in the way: token-heatmap keeps its clone of ${repository} there, and that is something else. Move it away, then run setup again`
+      );
+    }
+    rmSync(repo, { recursive: true, force: true });
+  }
+  mkdirSync2(dataDir, { recursive: true });
+  const network = { ...env, GIT_TERMINAL_PROMPT: "0", ...await batchSsh(dataDir, env) };
+  const refused = [];
+  for (const address of Object.values(addresses(repository))) {
+    const result = await run(dataDir, ["clone", "--quiet", "--depth", "1", "--no-tags", "--", address, "repo"], network);
+    if (result.code === 0) {
+      if ((await run(repo, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], env)).code !== 0) {
+        rmSync(repo, { recursive: true, force: true });
+        throw new Error(
+          `github.com/${repository} has no commits yet. Add a README.md to it on GitHub, then run setup again`
+        );
+      }
+      return { address, kept: false };
+    }
+    rmSync(repo, { recursive: true, force: true });
+    refused.push(`${address}: ${result.stderr.trim() || `exit code ${result.code}`}`);
+  }
+  throw new Error(
+    `cannot clone github.com/${repository}, over HTTPS or SSH. A profile README lives in a public repository named after the user, USER/USER: check that it exists. Git said:
+${refused.join("\n")}`
+  );
+}
+async function publish(dataDir, update, opts = {}) {
   const repo = join3(dataDir, "repo");
   if (!existsSync(join3(repo, ".git"))) {
     throw new Error(`${repo} is not a clone of the profile repository. Run /token-heatmap:setup in Claude Code first`);
+  }
+  const images = [...opts.images ?? []];
+  for (const [name] of images) {
+    if (!/^[A-Za-z0-9._-]+$/.test(name) || name === "history.jsonl")
+      throw new Error(`not an image's file name: ${name}`);
   }
   const env = gitEnv();
   const network = { ...env, GIT_TERMINAL_PROMPT: "0", ...await batchSsh(repo, env) };
@@ -524,43 +608,62 @@ async function publish(dataDir, update) {
     await git(repo, ["reset", "--quiet", "--hard", base], env);
     const current = { history: await readAt(repo, base, HISTORY2, env), readme: await readAt(repo, base, README, env) };
     const next = update(current);
-    if (next.history === current.history && next.readme === current.readme) return "unchanged";
-    mkdirSync(join3(repo, "token-heatmap"), { recursive: true });
-    writeFileSync(join3(repo, HISTORY2), next.history);
-    writeFileSync(join3(repo, README), next.readme);
-    await git(repo, ["add", "--force", "--", README, HISTORY2], env);
-    if ((await run(repo, ["diff", "--cached", "--quiet"], env)).code === 0) return "unchanged";
-    await git(
-      repo,
-      // No signing: a detached sync has no one to type a passphrase.
-      [
-        "-c",
-        `user.name=${BOT.name}`,
-        "-c",
-        `user.email=${BOT.email}`,
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "--quiet",
-        "--message",
-        COMMIT_MESSAGE
-      ],
-      // The environment wins over any configuration, author.name and committer.email included.
-      {
-        ...env,
-        GIT_AUTHOR_NAME: BOT.name,
-        GIT_AUTHOR_EMAIL: BOT.email,
-        GIT_COMMITTER_NAME: BOT.name,
-        GIT_COMMITTER_EMAIL: BOT.email
+    if (images.length === 0 && next.history === current.history && next.readme === current.readme) return "unchanged";
+    let pushed;
+    try {
+      mkdirSync2(join3(repo, FOLDER), { recursive: true });
+      writeFileSync2(join3(repo, HISTORY2), next.history);
+      writeFileSync2(join3(repo, README), next.readme);
+      for (const [name, bytes] of images) writeFileSync2(join3(repo, FOLDER, name), bytes);
+      const paths = [README, HISTORY2, ...images.map(([name]) => `${FOLDER}/${name}`)];
+      await git(repo, ["add", "--force", "--", ...paths], env);
+      if ((await run(repo, ["diff", "--cached", "--quiet"], env)).code === 0) {
+        await git(repo, ["reset", "--quiet", "--hard", base], env);
+        return "unchanged";
       }
-    );
-    if (await push(repo, branch, network)) return "pushed";
+      await commit(repo, env);
+      pushed = await push(repo, branch, network);
+    } catch (error) {
+      await undo(repo, base, env);
+      throw error;
+    }
+    if (pushed) return "pushed";
     if (attempt === 2) {
+      await undo(repo, base, env);
       throw new Error(
         `the push to ${branch} was refused twice, because the profile repository changed while sync ran. Nothing was forced, and the next sync tries again`
       );
     }
   }
+}
+async function commit(repo, env) {
+  await git(
+    repo,
+    // No signing: a detached sync has no one to type a passphrase.
+    [
+      "-c",
+      `user.name=${BOT.name}`,
+      "-c",
+      `user.email=${BOT.email}`,
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "--quiet",
+      "--message",
+      COMMIT_MESSAGE
+    ],
+    // The environment wins over any configuration, author.name and committer.email included.
+    {
+      ...env,
+      GIT_AUTHOR_NAME: BOT.name,
+      GIT_AUTHOR_EMAIL: BOT.email,
+      GIT_COMMITTER_NAME: BOT.name,
+      GIT_COMMITTER_EMAIL: BOT.email
+    }
+  );
+}
+async function undo(repo, base, env) {
+  await run(repo, ["reset", "--quiet", "--hard", base], env);
 }
 async function defaultBranch(repo, env) {
   const listed = await git(repo, ["ls-remote", "--symref", "origin", "HEAD"], env);
@@ -583,12 +686,16 @@ async function push(repo, branch, env) {
   if (result.code === 0) return true;
   if (/^!\t[^\t]*\t\[rejected\]/m.test(result.stdout)) return false;
   const refused = result.stdout.split("\n").filter((line) => line.startsWith("!	"));
-  throw new GitError(args, { ...result, stderr: [result.stderr.trim(), ...refused].filter(Boolean).join("\n") });
+  throw new PushError(args, {
+    ...result,
+    stderr: [result.stderr.trim(), ...refused].filter(Boolean).join("\n"),
+    declined: refused.some((line) => /\t\[remote rejected\]/.test(line))
+  });
 }
-async function batchSsh(repo, env) {
+async function batchSsh(dir, env) {
   if (env.GIT_SSH_COMMAND) return { GIT_SSH_COMMAND: `${env.GIT_SSH_COMMAND} -o BatchMode=yes` };
   if (env.GIT_SSH) return {};
-  const configured = await run(repo, ["config", "--get", "core.sshCommand"], env);
+  const configured = await run(dir, ["config", "--get", "core.sshCommand"], env);
   return { GIT_SSH_COMMAND: `${configured.code === 0 && configured.stdout.trim() || "ssh"} -o BatchMode=yes` };
 }
 function gitEnv() {
@@ -614,14 +721,22 @@ var GitError = class extends Error {
     this.name = "GitError";
   }
 };
+var PushError = class extends GitError {
+  declined;
+  constructor(args, result) {
+    super(args, result);
+    this.name = "PushError";
+    this.declined = result.declined;
+  }
+};
 async function git(repo, args, env) {
   const result = await run(repo, args, env);
   if (result.code !== 0) throw new GitError(args, result);
   return result.stdout;
 }
-function run(repo, args, env) {
+function run(dir, args, env) {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", ["-C", repo, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("git", ["-C", dir, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
     const stdout = [];
     const stderr = [];
     child.stdout.on("data", (chunk) => stdout.push(chunk));
@@ -643,8 +758,8 @@ function run(repo, args, env) {
 var START = "<!-- token-heatmap:start -->";
 var END = "<!-- token-heatmap:end -->";
 var MarkersError = class extends Error {
-  constructor() {
-    super(`README.md has no "${START}" line followed by an "${END}" line, so the block has nowhere to go`);
+  constructor(message = `README.md has no "${START}" line followed by an "${END}" line, so the block has nowhere to go`) {
+    super(message);
     this.name = "MarkersError";
   }
 };
@@ -656,40 +771,269 @@ function replaceBlock(readme, block) {
 ${block}
 ${readme.slice(end)}`;
 }
+function withMarkers(readme) {
+  const start = readme.indexOf(START);
+  const end = readme.indexOf(END);
+  if (start < 0 && end < 0) {
+    const gap = readme === "" || readme.endsWith("\n\n") ? "" : readme.endsWith("\n") ? "\n" : "\n\n";
+    return `${readme}${gap}${START}
+${END}
+`;
+  }
+  if (start >= 0 && readme.indexOf(END, start + START.length) >= 0) return readme;
+  throw new MarkersError(
+    start >= 0 ? `README.md has a "${START}" line with no "${END}" line after it. Add the end marker where the block is to end, or delete the start marker, then run setup again` : `README.md has a "${END}" line with no "${START}" line before it. Add the start marker where the block is to begin, or delete the end marker, then run setup again`
+  );
+}
 
 // src/sync.ts
 async function sync(opts) {
   const config = readConfig(opts.dataDir);
+  const collected = await collect(opts.providers, config.timeZone);
+  const records = config.models ? collected : withoutModels(collected);
+  const today = localDate(opts.now, config.timeZone);
+  return publish(
+    opts.dataDir,
+    (current) => nextFiles({
+      history: readHistory(current.history, config.repository),
+      readme: current.readme,
+      records,
+      machine: config.machine,
+      today
+    })
+  );
+}
+async function collect(providers2, timeZone) {
   const records = [];
-  for (const provider of opts.providers) {
-    for (const record of await provider.collect({ timeZone: config.timeZone })) {
+  for (const provider of providers2) {
+    for (const record of await provider.collect({ timeZone })) {
       if (record.provider !== provider.id) {
         throw new Error(`provider ${provider.id} returned a day of ${JSON.stringify(record.provider)}`);
       }
-      records.push(config.models ? record : { date: record.date, provider: record.provider, tokens: record.tokens });
+      records.push(record);
     }
   }
-  const today = localDate(opts.now, config.timeZone);
-  return publish(opts.dataDir, (current) => {
-    let history;
-    try {
-      history = merge(parseHistory(current.history), records, config.machine);
-    } catch (error) {
-      throw new Error(`token-heatmap/history.jsonl in ${config.repository}: ${error.message}`);
-    }
-    const text = formatHistory(history);
-    try {
-      parseHistory(text);
-    } catch (error) {
-      throw new Error(`the history to publish cannot be read back: ${error.message}`);
-    }
-    return { history: text, readme: replaceBlock(current.readme, render(history, today)) };
-  });
+  return records;
 }
+var withoutModels = (records) => records.map(({ date, provider, tokens }) => ({ date, provider, tokens }));
+function readHistory(text, repository) {
+  try {
+    return parseHistory(text);
+  } catch (error) {
+    throw new Error(`token-heatmap/history.jsonl in ${repository}: ${error.message}`);
+  }
+}
+function nextFiles(o) {
+  const history = merge(o.history, o.records, o.machine);
+  const text = formatHistory(history);
+  try {
+    parseHistory(text);
+  } catch (error) {
+    throw new Error(`the history to publish cannot be read back: ${error.message}`);
+  }
+  return { history: text, readme: replaceBlock(o.readme, render(history, o.today)) };
+}
+
+// src/setup.ts
+function profileRepository(arg) {
+  const [owner, name, ...rest] = arg.split("/");
+  if (rest.length > 0 || !/^[A-Za-z0-9-]{1,39}$/.test(owner)) return void 0;
+  if (name !== void 0 && name.toLowerCase() !== owner.toLowerCase()) return void 0;
+  return `${owner}/${owner}`;
+}
+async function setup(opts) {
+  const config = existingConfig(opts.dataDir);
+  if (opts.timeZone !== void 0 && !isTimeZone(opts.timeZone)) {
+    throw new Error(`--timezone takes an IANA time zone such as America/Los_Angeles, not ${opts.timeZone}`);
+  }
+  if (config && opts.timeZone !== void 0) return changeConfig(config, { ...opts, timeZone: opts.timeZone });
+  const timeZone = opts.timeZone !== void 0 ? canonicalTimeZone(opts.timeZone) : config?.timeZone ?? machineTimeZone();
+  if (timeZone === void 0) {
+    throw new Error(
+      "cannot tell this machine's time zone. Run setup again with --timezone ZONE, such as America/Los_Angeles"
+    );
+  }
+  const models = opts.models ?? config?.models ?? true;
+  const images = readImages(opts.assets);
+  const collected = await collect(opts.providers, timeZone);
+  if (!opts.yes) {
+    return {
+      done: "planned",
+      text: planText({
+        repository: opts.repository,
+        previous: config && !same(config.repository, opts.repository) ? config.repository : void 0,
+        timeZone,
+        machine: opts.adopt ?? config?.machine,
+        adopt: opts.adopt !== void 0,
+        models,
+        modelsKept: opts.models === void 0 && config !== void 0,
+        dates: [...new Set(collected.map((record) => record.date))].sort(),
+        modelNames: [...new Set(collected.flatMap((record) => Object.keys(record.models ?? {})))].sort()
+      })
+    };
+  }
+  const repo = join4(opts.dataDir, "repo");
+  const { address } = await clone(opts.dataDir, opts.repository, { replaces: config?.repository });
+  const records = models ? collected : withoutModels(collected);
+  const today = localDate(opts.now, timeZone);
+  const own = config?.machine ?? newMachineId();
+  let chosen = { machine: own, others: [] };
+  let done;
+  try {
+    done = await publish(
+      opts.dataDir,
+      (current) => {
+        const history = readHistory(current.history, opts.repository);
+        chosen = whichMachine(history, { repository: opts.repository, own, adopt: opts.adopt });
+        return nextFiles({ history, readme: withMarkers(current.readme), records, machine: chosen.machine, today });
+      },
+      { images }
+    );
+  } catch (error) {
+    if (error instanceof PushError) throw new Error(refusedPush(error, { repository: opts.repository, address, repo }));
+    throw error;
+  }
+  writeConfig(opts.dataDir, { repository: opts.repository, timeZone, machine: chosen.machine, models });
+  return {
+    done,
+    text: lines(
+      done === "pushed" ? `Pushed one commit by token-heatmap[bot] to github.com/${opts.repository}. The profile shows it at https://github.com/${opts.repository.split("/")[0]}` : `github.com/${opts.repository} has this block, history and images already, so nothing was pushed.`,
+      `This machine's id is ${chosen.machine}, and config.json in ${opts.dataDir} holds it.`,
+      chosen.others.length > 0 ? `The lines of ${list(chosen.others)} in history.jsonl stay as they are.` : void 0
+    )
+  };
+}
+function existingConfig(dataDir) {
+  if (!existsSync2(configPath(dataDir))) return void 0;
+  try {
+    return readConfig(dataDir);
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    throw new Error(
+      `${error.message}. Fix it, or delete it to set this machine up anew; its lines in history.jsonl can then be taken over with --adopt ID`
+    );
+  }
+}
+function changeConfig(config, opts) {
+  if (!same(config.repository, opts.repository)) {
+    throw new Error(
+      `this machine is set up for ${config.repository}. On a machine that is set up, --timezone changes config.json only: run setup without it to publish to ${opts.repository}`
+    );
+  }
+  if (opts.adopt !== void 0) {
+    throw new Error(
+      "on a machine that is set up, --timezone changes config.json only, and --adopt needs the history: run setup with --adopt first, then with --timezone"
+    );
+  }
+  const next = { ...config, timeZone: canonicalTimeZone(opts.timeZone), models: opts.models ?? config.models };
+  const changes = [
+    next.timeZone === config.timeZone ? void 0 : row("Time zone", `${config.timeZone}, to become ${next.timeZone}`),
+    next.models === config.models ? void 0 : row("Model names", next.models ? "not published, to become published" : "published, to become not published")
+  ].filter((change) => change !== void 0);
+  if (changes.length === 0) {
+    return { done: "unchanged", text: lines(`config.json counts days in ${next.timeZone} already. Nothing to change.`) };
+  }
+  const after = "Nothing is pushed, and the days already in history.jsonl stay as they are.";
+  if (!opts.yes) {
+    return {
+      done: "planned",
+      text: lines(
+        "token-heatmap setup: the plan. Nothing has changed yet.",
+        "",
+        ...changes,
+        "",
+        `Only config.json changes. ${after} From the next sync on, days are counted in ${next.timeZone}.`,
+        "Run setup again with --yes to make the change."
+      )
+    };
+  }
+  writeConfig(opts.dataDir, next);
+  return { done: "configured", text: lines(`config.json now counts days in ${next.timeZone}. ${after}`) };
+}
+function whichMachine(history, o) {
+  const ids = [...new Set(history.map((line) => line.machine))].sort();
+  const where = `token-heatmap/history.jsonl in ${o.repository}`;
+  if (o.adopt !== void 0) {
+    if (!ids.includes(o.adopt)) {
+      throw new Error(
+        `--adopt ${o.adopt}: ${where} has no lines of that machine, ${ids.length > 0 ? `only of ${list(ids)}` : "and no lines at all yet"}. Nothing was published`
+      );
+    }
+    return { machine: o.adopt, others: ids.filter((id) => id !== o.adopt) };
+  }
+  const others = ids.filter((id) => id !== o.own);
+  if (others.length > 0 && !ids.includes(o.own)) {
+    const one = others.length === 1;
+    throw new Error(
+      lines(
+        `${where} has the lines of ${one ? "another machine" : "other machines"}, ${list(others)}, and none of this one's. Nothing was published.`,
+        one ? `If they are this machine's own, from an earlier install, run setup again with --adopt ${others[0]} to go on with them.` : "If one of them is this machine's own, from an earlier install, run setup again with --adopt and its id to go on with it.",
+        "If another machine still publishes to this profile, set it up there only: token-heatmap publishes from one machine."
+      ).trimEnd()
+    );
+  }
+  return { machine: o.own, others };
+}
+function refusedPush(error, o) {
+  return lines(
+    `the push to ${o.repository} was refused, so nothing was published. ${error.message}`,
+    error.declined ? `GitHub turned the commit down, as it does on a protected branch: let your account push to the default branch of ${o.repository}, then run setup again.` : "To fix it, run `gh auth setup-git`, so that git signs in to github.com with your GitHub CLI login, then run setup again.",
+    !error.declined && !o.address.startsWith("https://") ? `This clone reaches GitHub over SSH, which that does not change: load your key with \`ssh-add\`, or switch the clone to HTTPS first with \`git -C "${o.repo}" remote set-url origin ${addresses(o.repository).https}\`.` : void 0
+  ).trimEnd();
+}
+function planText(plan) {
+  const days2 = plan.dates.length;
+  return lines(
+    "token-heatmap setup: the plan. Nothing has changed yet.",
+    "",
+    row(
+      "Repository",
+      `github.com/${plan.repository}, its default branch${plan.previous ? `, in place of ${plan.previous}` : ""}`
+    ),
+    row("Time zone", `${plan.timeZone}: it decides which day each response counts on`),
+    row(
+      "Machine id",
+      plan.adopt ? `${plan.machine}, taken over with --adopt: the history must have lines of it` : plan.machine ? `${plan.machine}, from config.json` : "a new random one"
+    ),
+    row(
+      "Days found",
+      days2 === 0 ? "none yet: the block shows a year of no tokens until there is usage" : `${days2} ${days2 === 1 ? "day" : "days"} with usage, ${plan.dates[0]} to ${plan.dates[days2 - 1]}`
+    ),
+    row(
+      "Model names",
+      !plan.models ? plan.modelsKept ? "none: this machine is set up with --no-models, and --models would publish them" : "none: --no-models keeps them out" : plan.modelNames.length === 0 ? "none found yet" : plan.modelNames.join(", ")
+    ),
+    "",
+    `With --yes, setup pushes one commit by token-heatmap[bot] to github.com/${plan.repository}: README.md with the block between two marker lines, added at its end if it has none, and in token-heatmap/, history.jsonl and the block's ${IMAGE_FILES.length} images.`,
+    `history.jsonl holds, for each day: the date, the provider, this machine's id, and the token counts by type${plan.models ? " and by model. A model name first seen later is published too" : ""}.`,
+    "What is pushed stays in the repository's git history.",
+    "Run setup again with --yes to publish."
+  );
+}
+function readImages(assets) {
+  const images = /* @__PURE__ */ new Map();
+  for (const name of IMAGE_FILES) {
+    try {
+      images.set(name, readFileSync2(join4(assets, name)));
+    } catch (error) {
+      throw new Error(
+        `the plugin's image ${name} cannot be read from ${assets}: ${error.message}. Reinstall the plugin, then run setup again`
+      );
+    }
+  }
+  return images;
+}
+var same = (a, b) => a.toLowerCase() === b.toLowerCase();
+var row = (name, value) => `  ${name.padEnd(12)} ${value}`;
+var list = (items) => items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+var lines = (...text) => text.filter((line) => line !== void 0).map((line) => `${line}
+`).join("");
 
 // src/cli.ts
 var USAGE = `usage: token-heatmap render --history FILE [--today YYYY-MM-DD]
        token-heatmap sync --foreground [--data-dir DIR]
+       token-heatmap setup --repo USER [--data-dir DIR] [--timezone ZONE] [--models | --no-models]
+                           [--adopt ID] [--yes]
 
 commands:
   render    print the README block for a history file
@@ -699,7 +1043,20 @@ commands:
             repository in one commit if a number changed; prints "pushed" or "unchanged"
             --foreground     run in this process, until the push is done
             --data-dir DIR   config.json and the clone; defaults to $CLAUDE_PLUGIN_DATA
+  setup     put the block on the profile README of github.com/USER/USER. Without --yes it prints
+            the plan, model names to be published included, and changes nothing
+            --repo USER        your GitHub user name: the profile repository is USER/USER
+            --data-dir DIR     where config.json and the clone go; defaults to $CLAUDE_PLUGIN_DATA
+            --timezone ZONE    the IANA zone that decides each day, such as America/Los_Angeles;
+                               defaults to this machine's. On a machine that is set up, it changes
+                               config.json only, and the days already recorded stay as they are
+            --no-models        publish each day's counts by type only, with no model names. Later
+                               runs keep the choice; --models publishes the names again
+            --adopt ID         go on as machine ID, whose lines the history holds from an earlier
+                               install
+            --yes              clone, push one commit by token-heatmap[bot], write config.json
 `;
+var ASSETS = fileURLToPath(new URL("../assets/", import.meta.url));
 var UsageError = class extends Error {
 };
 async function main(argv) {
@@ -709,6 +1066,8 @@ async function main(argv) {
       return renderCommand(rest);
     case "sync":
       return syncCommand(rest);
+    case "setup":
+      return setupCommand(rest);
     case "help":
     case "--help":
     case "-h":
@@ -729,7 +1088,7 @@ function renderCommand(args) {
   if (!isDate(today)) throw new UsageError(`--today takes a day written YYYY-MM-DD, such as 2026-11-13, not ${today}`);
   let text;
   try {
-    text = readFileSync2(values.history, "utf8");
+    text = readFileSync3(values.history, "utf8");
   } catch (error) {
     throw new Error(`cannot read ${values.history}: ${messageOf(error)}`);
   }
@@ -752,6 +1111,54 @@ async function syncCommand(args) {
   if (!dataDir) throw new UsageError("sync needs --data-dir DIR, or CLAUDE_PLUGIN_DATA set");
   process.stdout.write(`${await sync({ dataDir, providers, now: /* @__PURE__ */ new Date() })}
 `);
+  return 0;
+}
+async function setupCommand(args) {
+  const { values } = asUsage(
+    () => parseArgs({
+      args,
+      options: {
+        repo: { type: "string" },
+        "data-dir": { type: "string" },
+        timezone: { type: "string" },
+        models: { type: "boolean" },
+        "no-models": { type: "boolean" },
+        adopt: { type: "string" },
+        yes: { type: "boolean" }
+      },
+      strict: true
+    })
+  );
+  const dataDir = values["data-dir"] ?? process.env.CLAUDE_PLUGIN_DATA;
+  if (!dataDir) throw new UsageError("setup needs --data-dir DIR, or CLAUDE_PLUGIN_DATA set");
+  if (values.repo === void 0) throw new UsageError("setup needs --repo USER, your GitHub user name");
+  const repository = profileRepository(values.repo);
+  if (!repository) {
+    throw new UsageError(`--repo takes your GitHub user name, such as octocat, not ${JSON.stringify(values.repo)}`);
+  }
+  if (values.timezone !== void 0 && !isTimeZone(values.timezone)) {
+    throw new UsageError(
+      `--timezone takes an IANA time zone such as America/Los_Angeles, not ${JSON.stringify(values.timezone)}`
+    );
+  }
+  if (values.models && values["no-models"]) throw new UsageError("--models and --no-models do not go together");
+  if (values.adopt !== void 0 && !MACHINE_ID.test(values.adopt)) {
+    throw new UsageError(
+      `--adopt takes a machine id of lowercase letters and digits, not ${JSON.stringify(values.adopt)}`
+    );
+  }
+  const report = await setup({
+    dataDir,
+    repository,
+    timeZone: values.timezone,
+    models: values["no-models"] ? false : values.models ? true : void 0,
+    adopt: values.adopt,
+    yes: values.yes ?? false,
+    providers,
+    now: /* @__PURE__ */ new Date(),
+    assets: ASSETS
+  });
+  process.stdout.write(report.text);
   return 0;
 }
 function asUsage(read) {
