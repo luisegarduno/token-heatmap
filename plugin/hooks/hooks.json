@@ -1,0 +1,38 @@
+{
+  "description": "token-heatmap: sync the heatmap on your GitHub profile at most once an hour while Claude Code is in use",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "async": true,
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/token-heatmap\" sync --trigger SessionStart"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "async": true,
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/token-heatmap\" sync --trigger Stop"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "async": true,
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/token-heatmap\" sync --trigger SessionEnd"
+          }
+        ]
+      }
+    ]
+  }
+}

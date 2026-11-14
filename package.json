@@ -1,0 +1,31 @@
+{
+  "name": "token-heatmap",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A heatmap of your daily Claude Code token usage in your GitHub profile README",
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luisegarduno/token-heatmap.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=plugin/dist/cli.mjs --log-level=warning",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test --test-reporter=spec test/*.test.ts",
+    "test:unit": "node --import tsx --test --test-reporter=spec test/claude-code.test.ts test/cli.test.ts test/docs.test.ts test/levels.test.ts test/merge.test.ts test/readme.test.ts test/render.test.ts test/store.test.ts",
+    "check": "npm run lint && npm run typecheck && npm run build && npm test && git diff --exit-code plugin/dist"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.7",
+    "@types/node": "20.19.43",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}

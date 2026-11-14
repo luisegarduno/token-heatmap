@@ -1,0 +1,34 @@
+#!/bin/sh
+# token-heatmap: runs the bundled command line, dist/cli.mjs, with the node on PATH.
+#
+#   token-heatmap COMMAND [OPTIONS]
+#
+# Plain POSIX sh that calls no other program but node, so it can still say what is wrong on a
+# PATH that holds nothing at all. bin/token-heatmap.cmd does the same on Windows.
+
+case $0 in
+  */*) bin=${0%/*} ;;
+  *) bin=. ;;
+esac
+
+fix='Install Node.js 20 or later (https://nodejs.org, or your package manager), make sure `node` is on the PATH that Claude Code starts with, then try again.'
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "token-heatmap: node was not found on PATH. $fix" >&2
+  exit 127
+fi
+
+version=$(node --version 2>/dev/null) || version=
+major=${version#v}
+major=${major%%.*}
+case $major in
+  '' | *[!0-9]*) ;; # a version this cannot read: let node try
+  *)
+    if [ "$major" -lt 20 ]; then
+      echo "token-heatmap: the node on PATH is $version, and token-heatmap needs 20 or later. $fix" >&2
+      exit 1
+    fi
+    ;;
+esac
+
+exec node "$bin/../dist/cli.mjs" "$@"
