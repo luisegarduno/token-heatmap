@@ -2,21 +2,34 @@
 // counts, in total and by model, and model names that match the rule or read "other".
 //
 // Transcripts full of prompts, replies, file paths, project names and cloud resource addresses as
-// model names are synced into a bare repository on disk. The test then reads what reached it,
-// every object git holds there and not only the files at the tip, and fails on any other key or
-// any of the planted strings. Every value is made up.
+// model names are synced into a bare repository on disk, and set up into another: setup makes
+// the first push, and sync each one after it. The test then reads what reached it, every object
+// git holds there and not only the files at the tip, and fails on any other key or any of the
+// planted strings. Every value is made up.
 
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { test } from "node:test"
+import { readConfig } from "../src/config.ts"
 import { claudeCode } from "../src/providers/claude-code.ts"
 import { BOT, COMMIT_MESSAGE } from "../src/publish/git-readme.ts"
 import { END, START } from "../src/readme.ts"
-import { render } from "../src/render.ts"
+import { IMAGE_FILES, render } from "../src/render.ts"
+import { setup } from "../src/setup.ts"
 import { parseHistory } from "../src/store.ts"
 import { sync } from "../src/sync.ts"
-import { type AssistantLine, assistant, CONFIG, git, profileRepo, README, transcripts } from "./helpers.ts"
+import {
+  ASSETS,
+  type AssistantLine,
+  assistant,
+  CONFIG,
+  git,
+  onGitHub,
+  profileRepo,
+  README,
+  transcripts,
+} from "./helpers.ts"
 
 /** The rule for a published model name, written out here, not imported, so that the test checks the collector. */
 const MODEL_RULE = /^[A-Za-z0-9._:@-]{1,64}$/
@@ -192,94 +205,121 @@ const forms = (value: string) => [
   ]),
 ]
 
-for (const models of [true, false]) {
-  test(`only the listed fields reach the profile repository, and none of the planted strings ("models": ${models})`, async () => {
-    const root = plantedTranscripts()
-    const written = filesUnder(root)
-      .map((file) => `${file}\n${readFileSync(file, "utf8")}`)
-      .join("\n")
-    for (const [what, value] of Object.entries(PLANTED)) {
-      assert.ok(
-        forms(value).some((form) => written.includes(form)),
-        `the ${what} is in the transcripts`,
-      )
-    }
+/** The owner's README for setup: no markers yet, so setup adds them at its end. */
+const OWN = "# Hi, I'm a made-up user\n\nSome text of my own.\n"
 
-    const profile = profileRepo({ config: { models } })
-    assert.equal(await sync({ dataDir: profile.dataDir, providers: [claudeCode({ root })], now: NOW }), "pushed")
-
-    // history.jsonl: the listed keys, and nothing else.
-    const history = profile.file(HISTORY) ?? ""
-    const counts = (value: unknown, where: string) => {
-      assert.deepEqual(Object.keys(value as object), COUNTS, where)
-      for (const count of Object.values(value as object)) assert.ok(Number.isSafeInteger(count) && count >= 0, where)
-    }
-    for (const text of history.trimEnd().split("\n")) {
-      const line = JSON.parse(text)
-      assert.deepEqual(Object.keys(line), ["date", "provider", "machine", "tokens", ...(models ? ["models"] : [])])
-      assert.match(line.date, /^\d{4}-\d{2}-\d{2}$/)
-      assert.equal(line.provider, "claude-code")
-      assert.equal(line.machine, CONFIG.machine)
-      counts(line.tokens, "tokens")
-      for (const [name, value] of Object.entries(line.models ?? {})) {
-        assert.ok(MODEL_RULE.test(name) || name === "other", `model name ${JSON.stringify(name)}`)
-        counts(value, `models[${JSON.stringify(name)}]`)
-      }
-    }
-    // Each response once, and the names that are not published under "other".
-    const day = { input: 3, output: 367, cache_write: 1_204, cache_read: 71_134 }
-    assert.deepEqual(parseHistory(history), [
-      {
-        date: "2026-11-12",
-        provider: "claude-code",
-        machine: CONFIG.machine,
-        tokens: day,
-        ...(models
-          ? {
-              models: {
-                "claude-opus-5-5": { input: 3, output: 211 + 37, cache_write: 1_204, cache_read: 52_118 + 6_007 },
-                other: { input: 0, output: 17 + 19 + 23 + 29, cache_write: 0, cache_read: 4_001 + 4_003 },
-                "us.anthropic.claude-sonnet-5-5-v1:0": { input: 0, output: 31, cache_write: 0, cache_read: 5_005 },
-              },
-            }
-          : {}),
-      },
-    ])
-
-    // README.md: the owner's own text, and a block drawn from history.jsonl alone.
-    const readme = profile.file("README.md") ?? ""
-    assert.equal(
-      readme,
-      README.replace(`${START}\n${END}`, `${START}\n${render(parseHistory(history), TODAY)}\n${END}`),
-    )
-
-    // The commit: the two files, by the bot, with the fixed message and no other header. Its date,
-    // with this machine's UTC offset, is git's own.
-    const [commit, ...older] = profile.log()
-    assert.equal(older.length, 1)
-    assert.deepEqual(commit.files, ["README.md", HISTORY])
-    const raw = git(profile.remote, ["cat-file", "commit", commit.sha])
-    const bot = literally(`${BOT.name} <${BOT.email}>`)
-    assert.match(
-      raw,
-      new RegExp(
-        `^tree [0-9a-f]{40}\\nparent [0-9a-f]{40}\\nauthor ${bot} \\d+ [+-]\\d{4}\\ncommitter ${bot} \\d+ [+-]\\d{4}\\n\\n${literally(COMMIT_MESSAGE)}\\n$`,
-      ),
-    )
-    assert.deepEqual(git(profile.remote, ["ls-tree", "-r", "--name-only", "main"]).trimEnd().split("\n"), [
-      "README.md",
-      HISTORY,
-    ])
-
-    // Not one planted string, in the three files or anywhere in the repository: every object and every ref.
-    const repository =
-      git(profile.remote, ["cat-file", "--batch-all-objects", "--batch"]) +
-      git(profile.remote, ["for-each-ref", "--format=%(refname)"])
-    const places = { "history.jsonl": history, "README.md": readme, "the commit": raw, "the repository": repository }
-    for (const [place, text] of Object.entries(places)) {
+for (const via of ["sync", "setup"] as const) {
+  for (const models of [true, false]) {
+    test(`${via}: only the listed fields reach the profile repository, and none of the planted strings ("models": ${models})`, async () => {
+      const root = plantedTranscripts()
+      const written = filesUnder(root)
+        .map((file) => `${file}\n${readFileSync(file, "utf8")}`)
+        .join("\n")
       for (const [what, value] of Object.entries(PLANTED)) {
-        for (const form of forms(value)) assert.ok(!text.includes(form), `the ${what} reached ${place}: ${form}`)
+        assert.ok(
+          forms(value).some((form) => written.includes(form)),
+          `the ${what} is in the transcripts`,
+        )
       }
-    }
-  })
+
+      const providers = [claudeCode({ root })]
+      const profile = profileRepo(via === "sync" ? { config: { models } } : { readme: OWN, config: null })
+      if (via === "sync") {
+        assert.equal(await sync({ dataDir: profile.dataDir, providers, now: NOW }), "pushed")
+      } else {
+        onGitHub(profile.remote)
+        const { done } = await setup({
+          dataDir: profile.dataDir,
+          repository: CONFIG.repository,
+          timeZone: CONFIG.timeZone,
+          models,
+          yes: true,
+          providers,
+          now: NOW,
+          assets: ASSETS,
+        })
+        assert.equal(done, "pushed")
+      }
+      // setup makes a new machine id; profileRepo() writes CONFIG's for sync.
+      const machine = readConfig(profile.dataDir).machine
+      assert.equal(machine === CONFIG.machine, via === "sync")
+
+      // history.jsonl: the listed keys, and nothing else.
+      const history = profile.file(HISTORY) ?? ""
+      const counts = (value: unknown, where: string) => {
+        assert.deepEqual(Object.keys(value as object), COUNTS, where)
+        for (const count of Object.values(value as object)) assert.ok(Number.isSafeInteger(count) && count >= 0, where)
+      }
+      for (const text of history.trimEnd().split("\n")) {
+        const line = JSON.parse(text)
+        assert.deepEqual(Object.keys(line), ["date", "provider", "machine", "tokens", ...(models ? ["models"] : [])])
+        assert.match(line.date, /^\d{4}-\d{2}-\d{2}$/)
+        assert.equal(line.provider, "claude-code")
+        assert.equal(line.machine, machine)
+        counts(line.tokens, "tokens")
+        for (const [name, value] of Object.entries(line.models ?? {})) {
+          assert.ok(MODEL_RULE.test(name) || name === "other", `model name ${JSON.stringify(name)}`)
+          counts(value, `models[${JSON.stringify(name)}]`)
+        }
+      }
+      // Each response once, and the names that are not published under "other".
+      const day = { input: 3, output: 367, cache_write: 1_204, cache_read: 71_134 }
+      assert.deepEqual(parseHistory(history), [
+        {
+          date: "2026-11-12",
+          provider: "claude-code",
+          machine,
+          tokens: day,
+          ...(models
+            ? {
+                models: {
+                  "claude-opus-5-5": { input: 3, output: 211 + 37, cache_write: 1_204, cache_read: 52_118 + 6_007 },
+                  other: { input: 0, output: 17 + 19 + 23 + 29, cache_write: 0, cache_read: 4_001 + 4_003 },
+                  "us.anthropic.claude-sonnet-5-5-v1:0": { input: 0, output: 31, cache_write: 0, cache_read: 5_005 },
+                },
+              }
+            : {}),
+        },
+      ])
+
+      // README.md: the owner's own text, and a block drawn from history.jsonl alone, between the
+      // markers the owner put in, or that setup added at the end.
+      const readme = profile.file("README.md") ?? ""
+      const block = `${START}\n${render(parseHistory(history), TODAY)}\n${END}`
+      assert.equal(readme, via === "sync" ? README.replace(`${START}\n${END}`, block) : `${OWN}\n${block}\n`)
+
+      // The images: only setup's commit has them, each as the plugin ships it. sync never touches them.
+      const images = via === "sync" ? [] : IMAGE_FILES
+      for (const name of images) {
+        assert.equal(profile.file(`token-heatmap/${name}`), readFileSync(join(ASSETS, name), "utf8"), name)
+      }
+
+      // The commit: sync's touches the two files, and setup's the images as well. It is by the bot,
+      // with the fixed message and no other header. Its date, with this machine's UTC offset, is git's own.
+      const [commit, ...older] = profile.log()
+      assert.equal(older.length, 1)
+      const files = ["README.md", ...[HISTORY, ...images.map((name) => `token-heatmap/${name}`)].sort()]
+      assert.deepEqual(commit.files, files)
+      const raw = git(profile.remote, ["cat-file", "commit", commit.sha])
+      const bot = literally(`${BOT.name} <${BOT.email}>`)
+      assert.match(
+        raw,
+        new RegExp(
+          `^tree [0-9a-f]{40}\\nparent [0-9a-f]{40}\\nauthor ${bot} \\d+ [+-]\\d{4}\\ncommitter ${bot} \\d+ [+-]\\d{4}\\n\\n${literally(COMMIT_MESSAGE)}\\n$`,
+        ),
+      )
+      assert.deepEqual(git(profile.remote, ["ls-tree", "-r", "--name-only", "main"]).trimEnd().split("\n"), files)
+
+      // Not one planted string, in the three files or anywhere in the repository: every object and every ref.
+      const repository =
+        git(profile.remote, ["cat-file", "--batch-all-objects", "--batch"]) +
+        git(profile.remote, ["for-each-ref", "--format=%(refname)"])
+      const places = { "history.jsonl": history, "README.md": readme, "the commit": raw, "the repository": repository }
+      for (const [place, text] of Object.entries(places)) {
+        for (const [what, value] of Object.entries(PLANTED)) {
+          for (const form of forms(value)) assert.ok(!text.includes(form), `the ${what} reached ${place}: ${form}`)
+        }
+      }
+    })
+  }
 }

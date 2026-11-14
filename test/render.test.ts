@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
 import { test } from "node:test"
 import type { HistoryLine, Tokens } from "../src/providers/provider.ts"
-import { render } from "../src/render.ts"
+import { IMAGE_FILES, render } from "../src/render.ts"
 import { parseHistory } from "../src/store.ts"
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8")
@@ -296,6 +296,8 @@ test("each image's width and height are its file's own, and every file in plugin
   }
   const files = readdirSync(assets).filter((name) => name.endsWith(".svg"))
   assert.deepEqual([...used.keys()].sort(), files.map((name) => name.slice(0, -4)).sort())
+  // What setup copies to the profile repository: the same files, each once.
+  assert.deepEqual([...IMAGE_FILES].sort(), [...files].sort())
   for (const [file, size] of used) {
     const svg = readFileSync(new URL(`${file}.svg`, assets), "utf8")
     const match = /^<svg [^>]*\bwidth="(\d+)" height="(\d+)"/.exec(svg)

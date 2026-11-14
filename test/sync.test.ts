@@ -3,14 +3,12 @@
 // is made up.
 
 import assert from "node:assert/strict"
-import { spawnSync } from "node:child_process"
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { test } from "node:test"
-import { fileURLToPath } from "node:url"
 import { claudeCode } from "../src/providers/claude-code.ts"
 import { NO_TOKENS, type Provider, type Tokens, totalOf } from "../src/providers/provider.ts"
-import { BOT, type Files, publish } from "../src/publish/git-readme.ts"
+import { BOT, type Files, PushError, publish } from "../src/publish/git-readme.ts"
 import { END, START } from "../src/readme.ts"
 import { render } from "../src/render.ts"
 import { localDate, parseHistory } from "../src/store.ts"
@@ -18,18 +16,17 @@ import { sync } from "../src/sync.ts"
 import {
   assistant,
   CONFIG,
+  cli,
   GIT_CONFIG_GLOBAL,
   git,
+  homeWith,
   OWNER,
+  POSIX,
   profileRepo,
   README,
   scratch,
   transcripts,
 } from "./helpers.ts"
-
-const ROOT = fileURLToPath(new URL("..", import.meta.url))
-const LAUNCHER = join(ROOT, "plugin", "bin", "token-heatmap")
-const POSIX = { skip: process.platform === "win32" ? "runs sh" : false }
 
 /** Noon on November 13th in Los Angeles, the zone in CONFIG. */
 const NOW = new Date("2026-11-13T20:00:00Z")
@@ -82,21 +79,6 @@ const readmeFor = (history: string, today = TODAY, readme = README) =>
 
 /** Quotes a value for sh. */
 const sh = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
-
-function cli(args: string[], env: NodeJS.ProcessEnv) {
-  const { status, stdout, stderr } = spawnSync(LAUNCHER, args, { env, encoding: "utf8" })
-  return { status, stdout, stderr }
-}
-
-/** An environment whose home holds `files` as Claude Code transcripts, with no CLAUDE_PLUGIN_DATA or CLAUDE_CONFIG_DIR. */
-function homeWith(files: Record<string, readonly string[]>): NodeJS.ProcessEnv {
-  const home = scratch("home")
-  transcripts(files, join(home, ".claude", "projects"))
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home }
-  delete env.CLAUDE_PLUGIN_DATA
-  delete env.CLAUDE_CONFIG_DIR
-  return env
-}
 
 // ---------------------------------------------------------------------------------------------
 // The outline's cases
@@ -384,6 +366,9 @@ test("publish: a push refused twice stops with an error, and forces nothing", as
       [OWNER, "Write my profile README"],
     ],
   )
+  // Neither commit of ours stays in the clone.
+  assert.equal(git(profile.clone, ["log", "--format=%an", "HEAD"]).trim(), "Profile Owner")
+  assert.equal(git(profile.clone, ["status", "--porcelain", "--ignored"]), "")
 })
 
 test(
@@ -402,12 +387,18 @@ test(
         return { history: LINE_12, readme: current.readme }
       }),
       (error: Error) =>
-        error.name === "GitError" &&
+        error instanceof PushError &&
+        error.declined &&
         error.message.startsWith("git push failed: remote: this branch is protected") &&
         error.message.includes("\n!\tHEAD:refs/heads/main\t[remote rejected] (pre-receive hook declined)"),
     )
     assert.equal(calls, 1)
-    assert.equal(profile.log().length, 1)
+    const log = profile.log()
+    assert.equal(log.length, 1)
+    // The commit that could not be pushed is undone: the clone is the remote's, with nothing else in it.
+    assert.equal(git(profile.clone, ["rev-parse", "HEAD"]).trim(), log[0].sha)
+    assert.equal(git(profile.clone, ["status", "--porcelain", "--ignored"]), "")
+    assert.equal(existsSync(join(profile.clone, "token-heatmap")), false)
   },
 )
 

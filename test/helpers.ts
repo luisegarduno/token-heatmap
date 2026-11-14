@@ -6,19 +6,31 @@
 // - git reads no configuration from this machine: an empty global file and no system file. So
 //   no identity, signing or hook path of the developer's own changes what a test sees, and the
 //   tests pass on a machine with no git identity, as in CI. Every GIT_ variable is cleared too.
-// - The profile repository is a bare repository on disk. Nothing reaches the network.
+// - The profile repository is a bare repository on disk. Nothing reaches the network: setup's
+//   github.com addresses lead to the bare repository through onGitHub(), which also lets git
+//   reach no address but a file:// one.
 // - The home directory is an empty temporary one, and CLAUDE_CONFIG_DIR is unset, so a collector
 //   that is given no projects directory finds none, never this machine's own transcripts. A
 //   process a test starts inherits both.
 
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { after } from "node:test"
-import { pathToFileURL } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import type { Config } from "../src/config.ts"
+import { addresses } from "../src/publish/git-readme.ts"
 import { END, START } from "../src/readme.ts"
+
+/** This repository's root. */
+export const ROOT = fileURLToPath(new URL("..", import.meta.url))
+/** The launcher, which runs the bundle that `npm run check` builds before the tests. */
+export const LAUNCHER = join(ROOT, "plugin", "bin", "token-heatmap")
+/** The images the block uses, as the plugin ships them. */
+export const ASSETS = join(ROOT, "plugin", "assets")
+/** For a test that runs the launcher, or a shell script, with sh. */
+export const POSIX = { skip: process.platform === "win32" ? "runs sh" : false }
 
 const base = mkdtempSync(join(tmpdir(), "token-heatmap-test-"))
 after(() => rmSync(base, { recursive: true, force: true }))
@@ -47,6 +59,22 @@ delete process.env.CLAUDE_CONFIG_DIR
 /** Runs git in `cwd` and returns its output. Throws, with git's own message, when git fails. */
 export function git(cwd: string, args: readonly string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+}
+
+/** Runs plugin/bin/token-heatmap with `args` and `env`, and returns how it ended. */
+export function cli(args: readonly string[], env: NodeJS.ProcessEnv) {
+  const { status, stdout, stderr } = spawnSync(LAUNCHER, args, { env, encoding: "utf8" })
+  return { status, stdout, stderr }
+}
+
+/** An environment whose home holds `files` as Claude Code transcripts, with no CLAUDE_PLUGIN_DATA or CLAUDE_CONFIG_DIR. */
+export function homeWith(files: Record<string, readonly string[]>): NodeJS.ProcessEnv {
+  const home = scratch("home")
+  transcripts(files, join(home, ".claude", "projects"))
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home }
+  delete env.CLAUDE_PLUGIN_DATA
+  delete env.CLAUDE_CONFIG_DIR
+  return env
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -172,9 +200,9 @@ export type Commit = { sha: string; author: string; committer: string; subject: 
 export type Profile = {
   /** The bare repository that stands in for github.com/USER/USER. Its default branch is main. */
   remote: string
-  /** The data directory: config.json, and repo/, a shallow clone of the remote. */
+  /** The data directory: config.json, and repo/, a shallow clone of the remote. Empty when not set up. */
   dataDir: string
-  /** The clone in the data directory. */
+  /** The clone in the data directory, once there is one. */
   clone: string
   /** The commits on the remote's main, newest first. */
   log(): Commit[]
@@ -185,17 +213,28 @@ export type Profile = {
 }
 
 /**
- * A bare repository whose main holds one commit by the owner, with `readme` as README.md, and a
- * data directory with config.json and a shallow clone of it, as setup will leave them.
+ * A bare repository whose main holds one commit by the owner, with `readme` as README.md and
+ * `files` beside it, and a data directory with config.json and a shallow clone of it, as setup
+ * leaves them. `readme: null` leaves README.md out: the commit holds a LICENSE alone, unless
+ * `files` has more. `config: null` leaves the data directory empty, as before setup.
  */
-export function profileRepo(opts: { readme?: string; config?: Partial<Config> } = {}): Profile {
+export function profileRepo(
+  opts: { readme?: string | null; files?: Record<string, string>; config?: Partial<Config> | null } = {},
+): Profile {
   const dir = scratch("profile")
   const remote = join(dir, "made-up-user.git")
   git(dir, ["init", "--quiet", "--bare", "--initial-branch=main", remote])
   const seed = join(dir, "seed")
   git(dir, ["clone", "--quiet", remote, seed])
-  writeFileSync(join(seed, "README.md"), opts.readme ?? README)
-  git(seed, ["add", "README.md"])
+  const files = {
+    ...(opts.readme === null ? { LICENSE: "Made-up license text.\n" } : { "README.md": opts.readme ?? README }),
+    ...opts.files,
+  }
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(seed, path)), { recursive: true })
+    writeFileSync(join(seed, path), text)
+  }
+  git(seed, ["add", "--", ...Object.keys(files)])
   git(seed, [...AS_OWNER, "commit", "--quiet", "--message", "Write my profile README"])
   git(seed, ["push", "--quiet", "origin", "HEAD:refs/heads/main"])
   rmSync(seed, { recursive: true, force: true })
@@ -203,9 +242,11 @@ export function profileRepo(opts: { readme?: string; config?: Partial<Config> } 
   const dataDir = join(dir, "data")
   const clone = join(dataDir, "repo")
   mkdirSync(dataDir)
-  writeFileSync(join(dataDir, "config.json"), `${JSON.stringify({ ...CONFIG, ...opts.config }, null, 2)}\n`)
-  // A file:// address, because git ignores --depth for a plain local path.
-  git(dir, ["clone", "--quiet", "--depth", "1", pathToFileURL(remote).href, clone])
+  if (opts.config !== null) {
+    writeFileSync(join(dataDir, "config.json"), `${JSON.stringify({ ...CONFIG, ...opts.config }, null, 2)}\n`)
+    // A file:// address, because git ignores --depth for a plain local path.
+    git(dir, ["clone", "--quiet", "--depth", "1", pathToFileURL(remote).href, clone])
+  }
 
   const inRemote = (args: string[]) => git(dir, ["--git-dir", remote, ...args])
   return {
@@ -234,4 +275,27 @@ export function profileRepo(opts: { readme?: string; config?: Partial<Config> } 
       git(other, ["push", "--quiet", "origin", "HEAD:refs/heads/main"])
     },
   }
+}
+
+/**
+ * Writes the global git config so that the github.com addresses setup clones from lead to
+ * `remote`, and so that git reaches no address but a file:// one: an address left out here
+ * fails at once, with "transport 'https' not allowed", and never reaches the network.
+ *
+ * - `https`, `ssh`: whether that address of CONFIG.repository leads to `remote`. Both by default.
+ * - `pushTo`: pushes to either address go there instead, such as a repository that does not exist.
+ *
+ * With no `remote`, it only shuts the network out.
+ */
+export function onGitHub(remote?: string, o: { https?: boolean; ssh?: boolean; pushTo?: string } = {}): void {
+  const { https, ssh } = addresses(CONFIG.repository)
+  const config = ["[protocol]", "\tallow = never", '[protocol "file"]', "\tallow = always"]
+  if (remote !== undefined) {
+    config.push(`[url "${pathToFileURL(remote).href}"]`)
+    if (o.https ?? true) config.push(`\tinsteadOf = ${https}`)
+    if (o.ssh ?? true) config.push(`\tinsteadOf = ${ssh}`)
+  }
+  if (o.pushTo !== undefined)
+    config.push(`[url "${o.pushTo}"]`, `\tpushInsteadOf = ${https}`, `\tpushInsteadOf = ${ssh}`)
+  writeFileSync(GIT_CONFIG_GLOBAL, `${config.join("\n")}\n`)
 }
