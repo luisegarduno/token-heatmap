@@ -891,7 +891,7 @@ function isStale(lock, now) {
 function justWritten(path, now) {
   try {
     const age = now.getTime() - statSync2(path).mtimeMs;
-    return age >= 0 && age < 1e4;
+    return age > -1e3 && age < 1e4;
   } catch {
     return false;
   }

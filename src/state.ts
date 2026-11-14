@@ -163,11 +163,15 @@ export function isStale(lock: LockInfo, now: Date): boolean {
   return !isRunning(lock.pid)
 }
 
-/** A lock that cannot be read may be one that its sync is writing this moment. */
+/**
+ * A lock that cannot be read may be one that its sync is writing this moment. `now` is a whole
+ * millisecond and a file's mtime has a fraction, so a lock written in the same millisecond reads
+ * as slightly from the future: up to a second ahead still counts as just written.
+ */
 function justWritten(path: string, now: Date): boolean {
   try {
     const age = now.getTime() - statSync(path).mtimeMs
-    return age >= 0 && age < 10_000
+    return age > -1_000 && age < 10_000
   } catch {
     return false
   }

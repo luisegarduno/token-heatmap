@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { test } from "node:test"
 import { claudeCode } from "../src/providers/claude-code.ts"
@@ -148,6 +148,8 @@ test("the lock: one that cannot be read is held for 10 seconds, as it may be bei
   const dir = scratch("data")
   writeFileSync(lockPath(dir), "")
   assert.equal(takeLock(dir, new Date()), undefined)
+  // Written in this very millisecond: the mtime's fraction puts it just after a whole-millisecond now.
+  assert.equal(takeLock(dir, new Date(Math.floor(statSync(lockPath(dir)).mtimeMs))), undefined)
   const lock = takeLock(dir, new Date(Date.now() + 11_000))
   assert.ok(lock)
   lock.release()
