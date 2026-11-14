@@ -1,7 +1,9 @@
 name: CI
 
 on:
+  # A branch with a pull request is checked by its pull_request run alone, not twice.
   push:
+    branches: [main]
   pull_request:
 
 permissions:
