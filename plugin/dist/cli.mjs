@@ -484,7 +484,7 @@ function render(history, today) {
   const cells = totals.map((tokens, i) => image(String(level[i]), tooltip(tokens, first + i)));
   const weekdayRow = (label, r) => image(label) + cells.filter((_, i) => i % 7 === r).join("");
   const rows = [monthRow(first, Math.ceil(totals.length / 7)), ...WEEKDAY_FILES.map(weekdayRow), holdRow(), legendRow()];
-  return `<table><tr><td nowrap>
+  return `<table align="center"><tr><td nowrap>
 <b>${short(total, 2)}</b> Claude Code ${total === 1 ? "token" : "tokens"} in the last year<br>
 <kbd>${rows.join("<br\n>")}</kbd>
 </td></tr></table>`;
