@@ -7,6 +7,9 @@
 //   no identity, signing or hook path of the developer's own changes what a test sees, and the
 //   tests pass on a machine with no git identity, as in CI. Every GIT_ variable is cleared too.
 // - The profile repository is a bare repository on disk. Nothing reaches the network.
+// - The home directory is an empty temporary one, and CLAUDE_CONFIG_DIR is unset, so a collector
+//   that is given no projects directory finds none, never this machine's own transcripts. A
+//   process a test starts inherits both.
 
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -34,6 +37,13 @@ for (const name of Object.keys(process.env)) {
 process.env.GIT_CONFIG_GLOBAL = GIT_CONFIG_GLOBAL
 process.env.GIT_CONFIG_NOSYSTEM = "1"
 
+/** The home directory of this process and of every process it starts: empty unless a test writes to it. */
+export const HOME = join(base, "home")
+mkdirSync(HOME)
+process.env.HOME = HOME // os.homedir() on Linux and macOS
+process.env.USERPROFILE = HOME // and on Windows
+delete process.env.CLAUDE_CONFIG_DIR
+
 /** Runs git in `cwd` and returns its output. Throws, with git's own message, when git fails. */
 export function git(cwd: string, args: readonly string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
@@ -60,28 +70,39 @@ export function transcripts(files: Record<string, readonly string[]>, root = scr
 let uuids = 0
 const uuid = () => `00000000-0000-4000-8000-${String(++uuids).padStart(12, "0")}`
 
+/** An assistant line as an object, for a test to change into an older or odd shape. */
+export type AssistantLine = Record<string, unknown> & {
+  message: Record<string, unknown> & { usage: Record<string, unknown> }
+}
+
 /**
  * One transcript line of type "assistant", in the shape Claude Code writes today, with made-up
- * values. Token counts not given are 0.
+ * values. Token counts not given are 0. `edit`, when given, changes the line before it is written:
+ *
+ *   assistant({ id: "msg_1", requestId: "req_1" }, (line) => { line.version = "2.1.150" })
  */
-export function assistant(o: {
-  id: string
-  requestId: string
-  timestamp?: string
-  model?: string
-  sessionId?: string
-  input?: number
-  output?: number
-  cacheWrite?: number
-  cacheRead?: number
-}): string {
+export function assistant(
+  o: {
+    id: string
+    /** null: the line has no requestId, as before mid-2025. */
+    requestId: string | null
+    timestamp?: string
+    model?: string
+    sessionId?: string
+    input?: number
+    output?: number
+    cacheWrite?: number
+    cacheRead?: number
+  },
+  edit?: (line: AssistantLine) => void,
+): string {
   const usage = {
     input_tokens: o.input ?? 0,
     output_tokens: o.output ?? 0,
     cache_creation_input_tokens: o.cacheWrite ?? 0,
     cache_read_input_tokens: o.cacheRead ?? 0,
   }
-  return JSON.stringify({
+  const line: AssistantLine = {
     parentUuid: null,
     isSidechain: false,
     userType: "external",
@@ -93,7 +114,7 @@ export function assistant(o: {
     type: "assistant",
     uuid: uuid(),
     timestamp: o.timestamp ?? "2026-11-12T18:00:00.000Z",
-    requestId: o.requestId,
+    ...(o.requestId === null ? {} : { requestId: o.requestId }),
     message: {
       id: o.id,
       type: "message",
@@ -114,7 +135,9 @@ export function assistant(o: {
         fallback_credit: null,
       },
     },
-  })
+  }
+  edit?.(line)
+  return JSON.stringify(line)
 }
 
 // ---------------------------------------------------------------------------------------------

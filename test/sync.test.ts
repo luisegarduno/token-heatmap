@@ -88,12 +88,13 @@ function cli(args: string[], env: NodeJS.ProcessEnv) {
   return { status, stdout, stderr }
 }
 
-/** An environment whose home holds `files` as Claude Code transcripts, and no CLAUDE_PLUGIN_DATA. */
+/** An environment whose home holds `files` as Claude Code transcripts, with no CLAUDE_PLUGIN_DATA or CLAUDE_CONFIG_DIR. */
 function homeWith(files: Record<string, readonly string[]>): NodeJS.ProcessEnv {
   const home = scratch("home")
   transcripts(files, join(home, ".claude", "projects"))
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home }
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home }
   delete env.CLAUDE_PLUGIN_DATA
+  delete env.CLAUDE_CONFIG_DIR
   return env
 }
 
@@ -555,6 +556,31 @@ test(
     assert.equal(profile.log().length, again.stdout === "pushed\n" ? 3 : 2)
   },
 )
+
+test("sync reads $CLAUDE_CONFIG_DIR/projects when it is set, and ~/.claude/projects when it is empty", POSIX, () => {
+  const profile = profileRepo()
+  const env = homeWith({ "app/session-1.jsonl": DAY_12 })
+  const config = scratch("claude-config")
+  transcripts(
+    {
+      "app/session-2.jsonl": [
+        assistant({ id: "msg_9", requestId: "req_9", timestamp: "2026-11-11T18:00:00Z", output: 1_000 }),
+      ],
+    },
+    join(config, "projects"),
+  )
+  const days = () => parseHistory(profile.file(HISTORY) ?? "").map((line) => [line.date, totalOf(line.tokens)])
+  const run = (dir: string) =>
+    cli(["sync", "--foreground", "--data-dir", profile.dataDir], { ...env, CLAUDE_CONFIG_DIR: dir })
+
+  assert.deepEqual(run(config), { status: 0, stdout: "pushed\n", stderr: "" })
+  assert.deepEqual(days(), [["2026-11-11", 1_000]])
+  assert.deepEqual(run(""), { status: 0, stdout: "pushed\n", stderr: "" })
+  assert.deepEqual(days(), [
+    ["2026-11-11", 1_000],
+    ["2026-11-12", 96_412_870],
+  ])
+})
 
 test("sync: a command line that cannot run exits 2; a data dir with no config.json exits 1", POSIX, () => {
   const env = homeWith({})
