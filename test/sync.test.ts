@@ -576,10 +576,15 @@ test("sync reads $CLAUDE_CONFIG_DIR/projects when it is set, and ~/.claude/proje
 test("sync: a command line that cannot run exits 2; a data dir with no config.json exits 1", POSIX, () => {
   const env = homeWith({})
   const cases: [string[], string][] = [
-    [["sync"], "sync runs only with --foreground for now"],
+    [["sync"], "sync needs --data-dir DIR, or CLAUDE_PLUGIN_DATA set"],
     [["sync", "--foreground"], "sync needs --data-dir DIR, or CLAUDE_PLUGIN_DATA set"],
     [["sync", "--foreground", "--data-dir"], "Option '--data-dir <value>' argument missing"],
-    [["sync", "--foreground", "--trigger", "Stop"], "Unknown option '--trigger'"],
+    [
+      ["sync", "--trigger", "Start", "--data-dir", "x"],
+      '--trigger takes SessionStart, Stop or SessionEnd, not "Start"',
+    ],
+    [["sync", "--trigger", "Stop"], "sync needs --data-dir DIR, or CLAUDE_PLUGIN_DATA set"],
+    [["sync", "--force"], "Unknown option '--force'"],
   ]
   for (const [args, reason] of cases) {
     const { status, stdout, stderr } = cli(args, env)

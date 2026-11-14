@@ -7,13 +7,87 @@
 //     readme  = the remote's README.md, its block replaced   # markers missing: nothing is written
 //
 // setup runs the same steps, with its own update: see setup.ts.
+//
+// runSync wraps one sync for the command line and the hooks:
+//
+//   another sync holds sync.lock: stop                      # see state.ts
+//   a hook's sync, under 60 minutes after the last (5 for SessionEnd): count the skip, stop
+//   sync, then write its time, trigger and result or error to state.json
 
 import { readConfig } from "./config.ts"
 import type { DayRecord, HistoryLine, Provider } from "./providers/provider.ts"
-import { type Files, publish } from "./publish/git-readme.ts"
+import { type Files, PushError, publish } from "./publish/git-readme.ts"
 import { replaceBlock } from "./readme.ts"
 import { render } from "./render.ts"
+import { nextAllowed, readState, type Trigger, takeLock, withResult, withSkip, writeState } from "./state.ts"
 import { formatHistory, localDate, merge, parseHistory } from "./store.ts"
+
+/** How a run of runSync ended, when it did not throw. */
+export type Outcome = "pushed" | "unchanged" | "locked" | "limited"
+
+/**
+ * One sync under <dataDir>/sync.lock, its result written to state.json. "locked" when another
+ * sync holds the lock, which writes nothing. With a `trigger`, "limited" when the last sync was
+ * too recent: the skip is counted in state.json. An error is written there, then thrown.
+ */
+export async function runSync(opts: {
+  dataDir: string
+  providers: readonly Provider[]
+  now: Date
+  trigger?: Trigger
+}): Promise<Outcome> {
+  const { dataDir, now } = opts
+  const trigger = opts.trigger ?? null
+  const lock = takeLock(dataDir, now)
+  if (lock === undefined) return "locked"
+  try {
+    const state = readState(dataDir)
+    if (trigger !== null && nextAllowed(state, trigger, now) !== undefined) {
+      writeState(dataDir, withSkip(state, trigger, now))
+      return "limited"
+    }
+    let result: "pushed" | "unchanged"
+    try {
+      result = await sync(opts)
+    } catch (error) {
+      writeState(dataDir, withResult(state, { now, trigger, error: errorText(error) }))
+      throw error
+    }
+    writeState(dataDir, withResult(state, { now, trigger, result }))
+    return result
+  } finally {
+    lock.release()
+  }
+}
+
+/**
+ * An error as state.json keeps it: on one line, as status prints it, and a refused sign-in gets
+ * the fix that setup prints.
+ */
+export function errorText(error: unknown): string {
+  const message = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim()
+  if (error instanceof PushError && !error.declined) {
+    return `${message.replace(/\.$/, "")}. If git could not sign in, run \`gh auth setup-git\`; the next sync tries again`
+  }
+  return message
+}
+
+/**
+ * The environment of a sync that runs detached, where nobody can answer a prompt: git asks no
+ * terminal, Git Credential Manager asks nothing, and an askpass, git's or ssh's, fails at once
+ * instead of opening a window. So a push that needs a password fails, and the error is recorded.
+ */
+export function detachedEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const fail = process.platform === "win32" ? "token-heatmap-no-askpass" : "false"
+  return {
+    ...env,
+    GIT_TERMINAL_PROMPT: "0",
+    GCM_INTERACTIVE: "never",
+    GIT_ASKPASS: fail,
+    SSH_ASKPASS: fail,
+    SSH_ASKPASS_REQUIRE: "never",
+  }
+}
 
 /**
  * Collects from `providers` with the zone in <dataDir>/config.json, merges the days into the

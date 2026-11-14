@@ -1,5 +1,6 @@
 // src/cli.ts
-import { readFileSync as readFileSync3 } from "node:fs";
+import { spawn as spawn2 } from "node:child_process";
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -535,8 +536,8 @@ function short(n, decimals) {
 }
 
 // src/setup.ts
-import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
-import { join as join4 } from "node:path";
+import { existsSync as existsSync3, readFileSync as readFileSync3 } from "node:fs";
+import { join as join5 } from "node:path";
 
 // src/publish/git-readme.ts
 import { spawn } from "node:child_process";
@@ -786,7 +787,234 @@ ${END}
   );
 }
 
+// src/state.ts
+import { randomUUID } from "node:crypto";
+import { closeSync, existsSync as existsSync2, openSync, readFileSync as readFileSync2, renameSync as renameSync2, rmSync as rmSync2, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join4 } from "node:path";
+var TRIGGERS = ["SessionStart", "Stop", "SessionEnd"];
+var isTrigger = (value) => TRIGGERS.includes(value);
+var MINUTE = 6e4;
+var limitOf = (trigger) => (trigger === "SessionEnd" ? 5 : 60) * MINUTE;
+var STALE_LOCK = 15 * MINUTE;
+var statePath = (dataDir) => join4(dataDir, "state.json");
+var lockPath = (dataDir) => join4(dataDir, "sync.lock");
+function readState(dataDir) {
+  let value;
+  try {
+    value = JSON.parse(readFileSync2(statePath(dataDir), "utf8"));
+  } catch {
+    return {};
+  }
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+}
+function writeState(dataDir, state) {
+  const path = statePath(dataDir);
+  const next = `${path}.${process.pid}.tmp`;
+  writeFileSync3(next, `${JSON.stringify(state, null, 2)}
+`);
+  renameSync2(next, path);
+}
+function nextAllowed(state, trigger, now) {
+  const last = state.lastSync === void 0 ? Number.NaN : Date.parse(state.lastSync);
+  if (Number.isNaN(last) || last > now.getTime()) return void 0;
+  const next = last + limitOf(trigger);
+  return next > now.getTime() ? new Date(next) : void 0;
+}
+var withSkip = (state, trigger, now) => ({
+  ...state,
+  skipped: { count: (state.skipped?.count ?? 0) + 1, time: now.toISOString(), trigger }
+});
+function withResult(state, o) {
+  const time = o.now.toISOString();
+  const { skipped: _, ...rest } = state;
+  if ("error" in o) {
+    return {
+      ...rest,
+      lastSync: time,
+      trigger: o.trigger,
+      result: "error",
+      lastError: { time, trigger: o.trigger, message: o.error }
+    };
+  }
+  return {
+    ...rest,
+    lastSync: time,
+    trigger: o.trigger,
+    result: o.result,
+    ...o.result === "pushed" ? { lastPush: time } : {}
+  };
+}
+function readLock(dataDir) {
+  try {
+    const value = JSON.parse(readFileSync2(lockPath(dataDir), "utf8"));
+    if (typeof value?.pid === "number" && typeof value?.time === "string" && typeof value?.token === "string") {
+      return value;
+    }
+  } catch {
+  }
+  return void 0;
+}
+function takeLock(dataDir, now) {
+  const path = lockPath(dataDir);
+  const mine = { pid: process.pid, time: now.toISOString(), token: randomUUID() };
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    let fd;
+    try {
+      fd = openSync(path, "wx");
+    } catch (error) {
+      if (error.code !== "EEXIST" || attempt === 2) return void 0;
+      const held = readLock(dataDir);
+      if (held === void 0 ? justWritten(path, now) : !isStale(held, now)) return void 0;
+      if (readLock(dataDir)?.token !== held?.token) return void 0;
+      rmSync2(path, { force: true });
+      continue;
+    }
+    try {
+      writeFileSync3(fd, `${JSON.stringify(mine)}
+`);
+    } finally {
+      closeSync(fd);
+    }
+    return {
+      release() {
+        if (readLock(dataDir)?.token === mine.token) rmSync2(path, { force: true });
+      }
+    };
+  }
+  return void 0;
+}
+function isStale(lock, now) {
+  const age = now.getTime() - Date.parse(lock.time);
+  if (Number.isNaN(age) || age < 0 || age > STALE_LOCK) return true;
+  return !isRunning(lock.pid);
+}
+function justWritten(path, now) {
+  try {
+    const age = now.getTime() - statSync2(path).mtimeMs;
+    return age >= 0 && age < 1e4;
+  } catch {
+    return false;
+  }
+}
+function isRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+function statusText(dataDir, now) {
+  let config;
+  try {
+    config = readConfig(dataDir);
+  } catch (error) {
+    if (!existsSync2(configPath(dataDir))) {
+      return "token-heatmap is not set up on this machine: run /token-heatmap:setup in Claude Code.\n";
+    }
+    return `token-heatmap cannot sync: ${error.message}
+`;
+  }
+  const zone = config.timeZone;
+  const at = (iso) => `${clock(iso, zone)} (${ago(iso, now)})`;
+  const on = (trigger) => trigger ? `on ${trigger}` : "run by hand";
+  const state = readState(dataDir);
+  const lines2 = [
+    `Profile:    github.com/${config.repository}, machine ${config.machine}, days in ${zone}, ` + (config.models ? "model names published" : "no model names")
+  ];
+  if (state.lastSync === void 0) {
+    lines2.push("Last sync:  none yet. The next SessionStart, Stop or SessionEnd hook runs one");
+  } else {
+    const result = state.result === "pushed" ? "pushed one commit" : state.result === "unchanged" ? "no number changed, so nothing was pushed" : "failed, see Last error";
+    lines2.push(`Last sync:  ${at(state.lastSync)}, ${on(state.trigger)}: ${result}`);
+  }
+  lines2.push(`Last push:  ${state.lastPush === void 0 ? "none yet" : at(state.lastPush)}`);
+  if (state.skipped !== void 0) {
+    const { count, time, trigger } = state.skipped;
+    lines2.push(
+      `Skipped:    ${count} ${count === 1 ? "hook" : "hooks"} since the last sync, as it was too recent; the last ${at(time)}, on ${trigger}`
+    );
+  }
+  lines2.push(
+    `Last error: ${state.lastError === void 0 ? "none" : `${at(state.lastError.time)}, ${on(state.lastError.trigger)}: ${state.lastError.message}`}`
+  );
+  const lock = readLock(dataDir);
+  if (lock !== void 0 && !isStale(lock, now)) lines2.push(`Running:    a sync since ${at(lock.time)}`);
+  if (state.lastSync !== void 0) {
+    const hour = nextAllowed(state, "Stop", now);
+    const end = nextAllowed(state, "SessionEnd", now);
+    lines2.push(
+      `Next sync:  ${hour === void 0 ? "at the next hook" : `at the first hook from ${clock(hour.toISOString(), zone)}` + (end === void 0 ? ", or at the next SessionEnd" : `, or SessionEnd from ${clock(end.toISOString(), zone)}`)}`
+    );
+  }
+  return `${lines2.join("\n")}
+`;
+}
+function clock(iso, zone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(new Date(iso));
+  const part = (type) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}`;
+}
+function ago(iso, now) {
+  const minutes = Math.floor((now.getTime() - Date.parse(iso)) / MINUTE);
+  const count = (n, unit) => `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+  if (minutes < 1) return "just now";
+  if (minutes < 120) return count(minutes, "minute");
+  if (minutes < 48 * 60) return count(Math.floor(minutes / 60), "hour");
+  return count(Math.floor(minutes / (24 * 60)), "day");
+}
+
 // src/sync.ts
+async function runSync(opts) {
+  const { dataDir, now } = opts;
+  const trigger = opts.trigger ?? null;
+  const lock = takeLock(dataDir, now);
+  if (lock === void 0) return "locked";
+  try {
+    const state = readState(dataDir);
+    if (trigger !== null && nextAllowed(state, trigger, now) !== void 0) {
+      writeState(dataDir, withSkip(state, trigger, now));
+      return "limited";
+    }
+    let result;
+    try {
+      result = await sync(opts);
+    } catch (error) {
+      writeState(dataDir, withResult(state, { now, trigger, error: errorText(error) }));
+      throw error;
+    }
+    writeState(dataDir, withResult(state, { now, trigger, result }));
+    return result;
+  } finally {
+    lock.release();
+  }
+}
+function errorText(error) {
+  const message = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim();
+  if (error instanceof PushError && !error.declined) {
+    return `${message.replace(/\.$/, "")}. If git could not sign in, run \`gh auth setup-git\`; the next sync tries again`;
+  }
+  return message;
+}
+function detachedEnv(env) {
+  const fail = process.platform === "win32" ? "token-heatmap-no-askpass" : "false";
+  return {
+    ...env,
+    GIT_TERMINAL_PROMPT: "0",
+    GCM_INTERACTIVE: "never",
+    GIT_ASKPASS: fail,
+    SSH_ASKPASS: fail,
+    SSH_ASKPASS_REQUIRE: "never"
+  };
+}
 async function sync(opts) {
   const config = readConfig(opts.dataDir);
   const collected = await collect(opts.providers, config.timeZone);
@@ -872,7 +1100,7 @@ async function setup(opts) {
       })
     };
   }
-  const repo = join4(opts.dataDir, "repo");
+  const repo = join5(opts.dataDir, "repo");
   const { address } = await clone(opts.dataDir, opts.repository, { replaces: config?.repository });
   const records = models ? collected : withoutModels(collected);
   const today = localDate(opts.now, timeZone);
@@ -904,7 +1132,7 @@ async function setup(opts) {
   };
 }
 function existingConfig(dataDir) {
-  if (!existsSync2(configPath(dataDir))) return void 0;
+  if (!existsSync3(configPath(dataDir))) return void 0;
   try {
     return readConfig(dataDir);
   } catch (error) {
@@ -1014,7 +1242,7 @@ function readImages(assets) {
   const images = /* @__PURE__ */ new Map();
   for (const name of IMAGE_FILES) {
     try {
-      images.set(name, readFileSync2(join4(assets, name)));
+      images.set(name, readFileSync3(join5(assets, name)));
     } catch (error) {
       throw new Error(
         `the plugin's image ${name} cannot be read from ${assets}: ${error.message}. Reinstall the plugin, then run setup again`
@@ -1031,7 +1259,8 @@ var lines = (...text) => text.filter((line) => line !== void 0).map((line) => `$
 
 // src/cli.ts
 var USAGE = `usage: token-heatmap render --history FILE [--today YYYY-MM-DD]
-       token-heatmap sync --foreground [--data-dir DIR]
+       token-heatmap sync [--foreground] [--trigger EVENT] [--data-dir DIR]
+       token-heatmap status [--data-dir DIR]
        token-heatmap setup --repo USER [--data-dir DIR] [--timezone ZONE] [--models | --no-models]
                            [--adopt ID] [--yes]
 
@@ -1040,9 +1269,16 @@ commands:
             --history FILE   the history.jsonl to draw
             --today DATE     the grid's last day; defaults to today on this machine
   sync      count the transcripts, then push the history and the block to the profile
-            repository in one commit if a number changed; prints "pushed" or "unchanged"
-            --foreground     run in this process, until the push is done
-            --data-dir DIR   config.json and the clone; defaults to $CLAUDE_PLUGIN_DATA
+            repository in one commit if a number changed. Without --foreground it starts a
+            detached copy of itself and returns at once; the result goes to state.json
+            --foreground     run in this process, until the push is done, and print "pushed",
+                             "unchanged" or why it skipped
+            --trigger EVENT  the hook that runs it: SessionStart, Stop or SessionEnd. It then
+                             skips when the last sync was under an hour ago, 5 minutes for
+                             SessionEnd, and does nothing at all on a machine not set up
+            --data-dir DIR   config.json, state.json and the clone; defaults to $CLAUDE_PLUGIN_DATA
+  status    print the last sync, push, skips and error, from state.json
+            --data-dir DIR   defaults to $CLAUDE_PLUGIN_DATA
   setup     put the block on the profile README of github.com/USER/USER. Without --yes it prints
             the plan, model names to be published included, and changes nothing
             --repo USER        your GitHub user name: the profile repository is USER/USER
@@ -1057,6 +1293,7 @@ commands:
             --yes              clone, push one commit by token-heatmap[bot], write config.json
 `;
 var ASSETS = fileURLToPath(new URL("../assets/", import.meta.url));
+var CLI = fileURLToPath(import.meta.url);
 var UsageError = class extends Error {
 };
 async function main(argv) {
@@ -1068,6 +1305,8 @@ async function main(argv) {
       return syncCommand(rest);
     case "setup":
       return setupCommand(rest);
+    case "status":
+      return statusCommand(rest);
     case "help":
     case "--help":
     case "-h":
@@ -1088,7 +1327,7 @@ function renderCommand(args) {
   if (!isDate(today)) throw new UsageError(`--today takes a day written YYYY-MM-DD, such as 2026-11-13, not ${today}`);
   let text;
   try {
-    text = readFileSync3(values.history, "utf8");
+    text = readFileSync4(values.history, "utf8");
   } catch (error) {
     throw new Error(`cannot read ${values.history}: ${messageOf(error)}`);
   }
@@ -1104,13 +1343,49 @@ function renderCommand(args) {
 }
 async function syncCommand(args) {
   const { values } = asUsage(
-    () => parseArgs({ args, options: { foreground: { type: "boolean" }, "data-dir": { type: "string" } }, strict: true })
+    () => parseArgs({
+      args,
+      options: { foreground: { type: "boolean" }, trigger: { type: "string" }, "data-dir": { type: "string" } },
+      strict: true
+    })
   );
-  if (!values.foreground) throw new UsageError("sync runs only with --foreground for now");
+  const trigger = values.trigger;
+  if (trigger !== void 0 && !isTrigger(trigger)) {
+    throw new UsageError(`--trigger takes SessionStart, Stop or SessionEnd, not ${JSON.stringify(trigger)}`);
+  }
   const dataDir = values["data-dir"] ?? process.env.CLAUDE_PLUGIN_DATA;
   if (!dataDir) throw new UsageError("sync needs --data-dir DIR, or CLAUDE_PLUGIN_DATA set");
-  process.stdout.write(`${await sync({ dataDir, providers, now: /* @__PURE__ */ new Date() })}
+  if (!existsSync4(configPath(dataDir))) {
+    if (trigger !== void 0) return 0;
+    readConfig(dataDir);
+  }
+  if (!values.foreground) {
+    const args2 = ["sync", "--foreground", "--data-dir", dataDir, ...trigger ? ["--trigger", trigger] : []];
+    spawn2(process.execPath, [CLI, ...args2], {
+      cwd: dataDir,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: detachedEnv(process.env)
+    }).unref();
+    return 0;
+  }
+  const outcome = await runSync({ dataDir, providers, now: /* @__PURE__ */ new Date(), trigger });
+  process.stdout.write(`${OUTCOMES[outcome]}
 `);
+  return 0;
+}
+var OUTCOMES = {
+  pushed: "pushed",
+  unchanged: "unchanged",
+  locked: "skipped: another sync is running",
+  limited: "skipped: the last sync was too recent"
+};
+function statusCommand(args) {
+  const { values } = asUsage(() => parseArgs({ args, options: { "data-dir": { type: "string" } }, strict: true }));
+  const dataDir = values["data-dir"] ?? process.env.CLAUDE_PLUGIN_DATA;
+  if (!dataDir) throw new UsageError("status needs --data-dir DIR, or CLAUDE_PLUGIN_DATA set");
+  process.stdout.write(statusText(dataDir, /* @__PURE__ */ new Date()));
   return 0;
 }
 async function setupCommand(args) {

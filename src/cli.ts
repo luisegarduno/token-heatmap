@@ -1,23 +1,27 @@
 // token-heatmap's command line. plugin/bin/token-heatmap runs the bundle of this file.
 //
 //   token-heatmap render --history FILE [--today YYYY-MM-DD]
-//   token-heatmap sync --foreground [--data-dir DIR]
+//   token-heatmap sync [--foreground] [--trigger EVENT] [--data-dir DIR]
+//   token-heatmap status [--data-dir DIR]
 //   token-heatmap setup --repo USER [--data-dir DIR] [--timezone ZONE] [--models | --no-models] [--adopt ID] [--yes]
 //
 // Exit codes: 0 done, 1 failed, 2 the command line was wrong.
 
-import { readFileSync } from "node:fs"
+import { spawn } from "node:child_process"
+import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { parseArgs } from "node:util"
-import { isTimeZone, MACHINE_ID } from "./config.ts"
+import { configPath, isTimeZone, MACHINE_ID, readConfig } from "./config.ts"
 import { providers } from "./providers/index.ts"
 import { render } from "./render.ts"
 import { profileRepository, setup } from "./setup.ts"
+import { isTrigger, statusText } from "./state.ts"
 import { isDate, parseHistory } from "./store.ts"
-import { sync } from "./sync.ts"
+import { detachedEnv, type Outcome, runSync } from "./sync.ts"
 
 const USAGE = `usage: token-heatmap render --history FILE [--today YYYY-MM-DD]
-       token-heatmap sync --foreground [--data-dir DIR]
+       token-heatmap sync [--foreground] [--trigger EVENT] [--data-dir DIR]
+       token-heatmap status [--data-dir DIR]
        token-heatmap setup --repo USER [--data-dir DIR] [--timezone ZONE] [--models | --no-models]
                            [--adopt ID] [--yes]
 
@@ -26,9 +30,16 @@ commands:
             --history FILE   the history.jsonl to draw
             --today DATE     the grid's last day; defaults to today on this machine
   sync      count the transcripts, then push the history and the block to the profile
-            repository in one commit if a number changed; prints "pushed" or "unchanged"
-            --foreground     run in this process, until the push is done
-            --data-dir DIR   config.json and the clone; defaults to $CLAUDE_PLUGIN_DATA
+            repository in one commit if a number changed. Without --foreground it starts a
+            detached copy of itself and returns at once; the result goes to state.json
+            --foreground     run in this process, until the push is done, and print "pushed",
+                             "unchanged" or why it skipped
+            --trigger EVENT  the hook that runs it: SessionStart, Stop or SessionEnd. It then
+                             skips when the last sync was under an hour ago, 5 minutes for
+                             SessionEnd, and does nothing at all on a machine not set up
+            --data-dir DIR   config.json, state.json and the clone; defaults to $CLAUDE_PLUGIN_DATA
+  status    print the last sync, push, skips and error, from state.json
+            --data-dir DIR   defaults to $CLAUDE_PLUGIN_DATA
   setup     put the block on the profile README of github.com/USER/USER. Without --yes it prints
             the plan, model names to be published included, and changes nothing
             --repo USER        your GitHub user name: the profile repository is USER/USER
@@ -45,6 +56,8 @@ commands:
 
 /** The block's images: the bundle is plugin/dist/cli.mjs, and the images are in plugin/assets. */
 const ASSETS = fileURLToPath(new URL("../assets/", import.meta.url))
+/** This command line's own file, the bundle, which a detached sync runs again. */
+const CLI = fileURLToPath(import.meta.url)
 
 /** A command line that cannot run. It exits 2, with the usage. */
 class UsageError extends Error {}
@@ -58,6 +71,8 @@ async function main(argv: string[]): Promise<number> {
       return syncCommand(rest)
     case "setup":
       return setupCommand(rest)
+    case "status":
+      return statusCommand(rest)
     case "help":
     case "--help":
     case "-h":
@@ -96,15 +111,57 @@ function renderCommand(args: string[]): number {
 
 async function syncCommand(args: string[]): Promise<number> {
   const { values } = asUsage(() =>
-    parseArgs({ args, options: { foreground: { type: "boolean" }, "data-dir": { type: "string" } }, strict: true }),
+    parseArgs({
+      args,
+      options: { foreground: { type: "boolean" }, trigger: { type: "string" }, "data-dir": { type: "string" } },
+      strict: true,
+    }),
   )
-  // The hooks are to run sync without --foreground, so that it hands the work to a detached copy
-  // of itself. Until that exists, sync runs only in the foreground, and says so.
-  if (!values.foreground) throw new UsageError("sync runs only with --foreground for now")
+  const trigger = values.trigger
+  if (trigger !== undefined && !isTrigger(trigger)) {
+    throw new UsageError(`--trigger takes SessionStart, Stop or SessionEnd, not ${JSON.stringify(trigger)}`)
+  }
   const dataDir = values["data-dir"] ?? process.env.CLAUDE_PLUGIN_DATA
   if (!dataDir) throw new UsageError("sync needs --data-dir DIR, or CLAUDE_PLUGIN_DATA set")
 
-  process.stdout.write(`${await sync({ dataDir, providers, now: new Date() })}\n`)
+  // Not set up yet, or the one hook call after an uninstall: a hook's sync writes nothing and
+  // says nothing. Run by hand, sync says what to do.
+  if (!existsSync(configPath(dataDir))) {
+    if (trigger !== undefined) return 0
+    readConfig(dataDir) // throws, naming the file
+  }
+
+  // A hook waits for its command, and SessionEnd gives all its hooks 1.5 s: hand the sync to a
+  // detached copy of this command, which writes its result to state.json, and return now.
+  if (!values.foreground) {
+    const args = ["sync", "--foreground", "--data-dir", dataDir, ...(trigger ? ["--trigger", trigger] : [])]
+    spawn(process.execPath, [CLI, ...args], {
+      cwd: dataDir,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: detachedEnv(process.env),
+    }).unref()
+    return 0
+  }
+
+  const outcome = await runSync({ dataDir, providers, now: new Date(), trigger })
+  process.stdout.write(`${OUTCOMES[outcome]}\n`)
+  return 0
+}
+
+const OUTCOMES: Record<Outcome, string> = {
+  pushed: "pushed",
+  unchanged: "unchanged",
+  locked: "skipped: another sync is running",
+  limited: "skipped: the last sync was too recent",
+}
+
+function statusCommand(args: string[]): number {
+  const { values } = asUsage(() => parseArgs({ args, options: { "data-dir": { type: "string" } }, strict: true }))
+  const dataDir = values["data-dir"] ?? process.env.CLAUDE_PLUGIN_DATA
+  if (!dataDir) throw new UsageError("status needs --data-dir DIR, or CLAUDE_PLUGIN_DATA set")
+  process.stdout.write(statusText(dataDir, new Date()))
   return 0
 }
 
