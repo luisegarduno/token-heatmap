@@ -3,7 +3,7 @@ import { readFileSync as readFileSync2 } from "node:fs";
 import { parseArgs } from "node:util";
 
 // src/providers/claude-code.ts
-import { readdir, readFile } from "node:fs/promises";
+import { open, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -175,37 +175,43 @@ function readTokens(value, where, n) {
 
 // src/providers/claude-code.ts
 var CLAUDE_CODE = "claude-code";
+var MODEL_NAME = /^[A-Za-z0-9._:@-]{1,64}$/;
+var OTHER = "other";
+var SYNTHETIC = "<synthetic>";
+var CHUNK_SIZE = 1 << 20;
 function claudeCode(opts = {}) {
   return {
     id: CLAUDE_CODE,
     async collect({ timeZone }) {
-      const root = opts.root ?? join(homedir(), ".claude", "projects");
+      const root = opts.root ?? projectsDir();
       const responses = /* @__PURE__ */ new Map();
+      const chunk = Buffer.allocUnsafe(CHUNK_SIZE);
+      const count = (bytes) => {
+        const line = readAssistantLine(bytes);
+        if (!line) return;
+        const seen = responses.get(line.key);
+        if (!seen) {
+          responses.set(line.key, { model: line.model, usage: line.usage, first: line.time });
+          return;
+        }
+        if (totalOf(line.usage) > totalOf(seen.usage)) seen.usage = line.usage;
+        if (line.time < seen.first) seen.first = line.time;
+      };
       for (const file of await transcriptFiles(root)) {
-        const lines = (await readFile(file, "utf8")).split("\n");
-        lines.forEach((text, index) => {
-          if (text.trim() === "") return;
-          let value;
-          try {
-            value = JSON.parse(text);
-          } catch {
-            throw new Error(`${file}:${index + 1}: not JSON`);
-          }
-          const line = readAssistantLine(value);
-          if (!line) return;
-          const seen = responses.get(line.key);
-          if (!seen) {
-            responses.set(line.key, { model: line.model, usage: line.usage, first: line.time });
-            return;
-          }
-          if (totalOf(line.usage) > totalOf(seen.usage)) seen.usage = line.usage;
-          if (line.time < seen.first) seen.first = line.time;
-        });
+        try {
+          await readLines(file, chunk, count);
+        } catch (error) {
+          if (!isGone(error)) throw error;
+        }
       }
       return days(responses.values(), timeZone);
     }
   };
 }
+function projectsDir() {
+  return join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
+}
+var isGone = (error) => error?.code === "ENOENT";
 async function transcriptFiles(root) {
   const files = [];
   const walk = async (dir) => {
@@ -213,7 +219,7 @@ async function transcriptFiles(root) {
     try {
       entries = await readdir(dir, { withFileTypes: true });
     } catch (error) {
-      if (dir === root && error.code === "ENOENT") return;
+      if (isGone(error)) return;
       throw error;
     }
     for (const entry of entries) {
@@ -225,31 +231,76 @@ async function transcriptFiles(root) {
   await walk(root);
   return files.sort();
 }
+var NEWLINE = 10;
+async function readLines(file, chunk, onLine) {
+  const handle = await open(file, "r");
+  try {
+    let pending = [];
+    for (; ; ) {
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      const view = chunk.subarray(0, bytesRead);
+      let start = 0;
+      for (let end = view.indexOf(NEWLINE); end >= 0; end = view.indexOf(NEWLINE, start)) {
+        const rest = view.subarray(start, end);
+        if (pending.length === 0) {
+          onLine(rest);
+        } else {
+          pending.push(rest);
+          onLine(Buffer.concat(pending));
+          pending = [];
+        }
+        start = end + 1;
+      }
+      if (start < bytesRead) pending.push(Buffer.from(view.subarray(start)));
+    }
+    if (pending.length > 0) onLine(Buffer.concat(pending));
+  } finally {
+    await handle.close();
+  }
+}
+var QUOTED_USAGE = Buffer.from('"usage"');
+var QUOTED_ASSISTANT = Buffer.from('"assistant"');
 var isObject2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var isCount = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-function readAssistantLine(value) {
-  if (!isObject2(value) || value.type !== "assistant") return void 0;
-  const { message, requestId, timestamp } = value;
-  if (!isObject2(message) || typeof requestId !== "string" || typeof timestamp !== "string") return void 0;
-  const { id, model, usage } = message;
-  if (typeof id !== "string" || typeof model !== "string" || model === "" || !isObject2(usage)) return void 0;
-  const time = Date.parse(timestamp);
-  if (Number.isNaN(time)) return void 0;
-  const { input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens } = usage;
-  if (!isCount(input_tokens) || !isCount(output_tokens) || !isCount(cache_creation_input_tokens) || !isCount(cache_read_input_tokens)) {
+var optionalCount = (value) => value === void 0 || value === null ? 0 : isCount(value) ? value : void 0;
+function readAssistantLine(bytes) {
+  if (bytes.indexOf(QUOTED_USAGE) < 0 || bytes.indexOf(QUOTED_ASSISTANT) < 0) return void 0;
+  let value;
+  try {
+    value = JSON.parse(bytes.toString("utf8"));
+  } catch {
     return void 0;
   }
+  if (!isObject2(value) || value.type !== "assistant") return void 0;
+  const { message, requestId, sessionId, timestamp } = value;
+  if (!isObject2(message) || typeof timestamp !== "string") return void 0;
+  const { id, model, usage } = message;
+  if (typeof id !== "string" || id === "" || model === SYNTHETIC || !isObject2(usage)) return void 0;
+  const time = Date.parse(timestamp);
+  if (Number.isNaN(time)) return void 0;
+  const counts = readUsage(usage);
+  if (!counts) return void 0;
   return {
-    key: JSON.stringify([id, requestId]),
-    model,
-    usage: {
-      input: input_tokens,
-      output: output_tokens,
-      cache_write: cache_creation_input_tokens,
-      cache_read: cache_read_input_tokens
-    },
+    // Copies keep message.id and requestId. Lines from before requestId was written fall back
+    // to the session, as ccusage does; the two kinds of key cannot meet.
+    key: typeof requestId === "string" && requestId !== "" ? JSON.stringify([id, requestId]) : JSON.stringify([id, null, typeof sessionId === "string" ? sessionId : null]),
+    model: typeof model === "string" && MODEL_NAME.test(model) ? model : OTHER,
+    usage: counts,
     time
   };
+}
+function readUsage(usage) {
+  const { input_tokens: input, output_tokens: output, cache_creation: split } = usage;
+  const cacheRead = optionalCount(usage.cache_read_input_tokens);
+  let cacheWrite = optionalCount(usage.cache_creation_input_tokens);
+  if (!isCount(input) || !isCount(output) || cacheRead === void 0 || cacheWrite === void 0) return void 0;
+  if (cacheWrite === 0 && isObject2(split)) {
+    const fiveMinutes = optionalCount(split.ephemeral_5m_input_tokens);
+    const oneHour = optionalCount(split.ephemeral_1h_input_tokens);
+    if (fiveMinutes !== void 0 && oneHour !== void 0) cacheWrite = fiveMinutes + oneHour;
+  }
+  return { input, output, cache_write: cacheWrite, cache_read: cacheRead };
 }
 function days(responses, timeZone) {
   const byDay = /* @__PURE__ */ new Map();
