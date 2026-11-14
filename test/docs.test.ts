@@ -149,7 +149,13 @@ test("every relative link in the docs leads to a file or a heading that exists",
           .replace(/ /g, "-"),
       ),
     )
-    for (const [, target] of text.matchAll(/\]\(([^)\s]+)\)/g)) {
+    // Markdown links, and the src and srcset of an HTML image outside a code block.
+    const prose = text.replace(/^```[\s\S]*?^```$/gm, "")
+    const targets = [
+      ...[...text.matchAll(/\]\(([^)\s]+)\)/g)].map((match) => match[1]),
+      ...[...prose.matchAll(/\b(?:src|srcset)="([^"]+)"/g)].map((match) => match[1]),
+    ]
+    for (const target of targets) {
       if (/^[a-z]+:/.test(target)) continue
       if (target.startsWith("#")) {
         assert.ok(slugs.has(target.slice(1)), `${doc}: ${target}`)

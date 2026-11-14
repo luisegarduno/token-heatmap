@@ -6,6 +6,11 @@ A heatmap of your daily Claude Code token usage in your GitHub profile README, l
 96.4M tokens on June 10th.
 ```
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/heatmap-dark.png">
+  <img src="docs/images/heatmap-light.png" width="810" alt="The heatmap on a GitHub profile: a total for the last year above a grid of the last 12 months, one square per day, light gray for days with no usage and darker orange for heavier days, with a Less-to-More legend">
+</picture>
+
 It is a Claude Code plugin. It reads the usage Claude Code already records on your machine, and pushes the daily totals and the heatmap to your own profile repository with your own git credentials. Nothing is hosted, there is no server and no secret, it costs nothing, and it needs no account beyond GitHub.
 
 - [Before you start](#before-you-start)
