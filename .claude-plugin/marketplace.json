@@ -1,0 +1,17 @@
+{
+  "name": "token-heatmap",
+  "owner": {
+    "name": "luisegarduno"
+  },
+  "metadata": {
+    "description": "token-heatmap's own marketplace: the one plugin in this repository"
+  },
+  "plugins": [
+    {
+      "name": "token-heatmap",
+      "source": "./plugin",
+      "description": "A heatmap of your daily Claude Code token usage in your GitHub profile README",
+      "version": "0.1.0"
+    }
+  ]
+}

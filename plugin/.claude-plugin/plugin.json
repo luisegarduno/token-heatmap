@@ -1,0 +1,12 @@
+{
+  "name": "token-heatmap",
+  "version": "0.1.0",
+  "description": "A heatmap of your daily Claude Code token usage in your GitHub profile README",
+  "author": {
+    "name": "luisegarduno"
+  },
+  "homepage": "https://github.com/luisegarduno/token-heatmap",
+  "repository": "https://github.com/luisegarduno/token-heatmap",
+  "license": "GPL-3.0-only",
+  "keywords": ["github", "profile", "readme", "heatmap", "tokens", "usage"]
+}
