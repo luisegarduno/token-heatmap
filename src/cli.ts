@@ -1,30 +1,40 @@
 // token-heatmap's command line. plugin/bin/token-heatmap runs the bundle of this file.
 //
 //   token-heatmap render --history FILE [--today YYYY-MM-DD]
+//   token-heatmap sync --foreground [--data-dir DIR]
 //
 // Exit codes: 0 done, 1 failed, 2 the command line was wrong.
 
 import { readFileSync } from "node:fs"
 import { parseArgs } from "node:util"
+import { providers } from "./providers/index.ts"
 import { render } from "./render.ts"
 import { isDate, parseHistory } from "./store.ts"
+import { sync } from "./sync.ts"
 
 const USAGE = `usage: token-heatmap render --history FILE [--today YYYY-MM-DD]
+       token-heatmap sync --foreground [--data-dir DIR]
 
 commands:
   render    print the README block for a history file
             --history FILE   the history.jsonl to draw
             --today DATE     the grid's last day; defaults to today on this machine
+  sync      count the transcripts, then push the history and the block to the profile
+            repository in one commit if a number changed; prints "pushed" or "unchanged"
+            --foreground     run in this process, until the push is done
+            --data-dir DIR   config.json and the clone; defaults to $CLAUDE_PLUGIN_DATA
 `
 
 /** A command line that cannot run. It exits 2, with the usage. */
 class UsageError extends Error {}
 
-function main(argv: string[]): number {
+async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv
   switch (command) {
     case "render":
       return renderCommand(rest)
+    case "sync":
+      return syncCommand(rest)
     case "help":
     case "--help":
     case "-h":
@@ -61,6 +71,20 @@ function renderCommand(args: string[]): number {
   return 0
 }
 
+async function syncCommand(args: string[]): Promise<number> {
+  const { values } = asUsage(() =>
+    parseArgs({ args, options: { foreground: { type: "boolean" }, "data-dir": { type: "string" } }, strict: true }),
+  )
+  // The hooks are to run sync without --foreground, so that it hands the work to a detached copy
+  // of itself. Until that exists, sync runs only in the foreground, and says so.
+  if (!values.foreground) throw new UsageError("sync runs only with --foreground for now")
+  const dataDir = values["data-dir"] ?? process.env.CLAUDE_PLUGIN_DATA
+  if (!dataDir) throw new UsageError("sync needs --data-dir DIR, or CLAUDE_PLUGIN_DATA set")
+
+  process.stdout.write(`${await sync({ dataDir, providers, now: new Date() })}\n`)
+  return 0
+}
+
 /** Runs `read`, and turns what it throws into a UsageError: parseArgs throws on an unknown option. */
 function asUsage<T>(read: () => T): T {
   try {
@@ -81,14 +105,17 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
 
 // The process ends by itself once stdout is flushed. process.exit() here could cut off a long
 // block written to a pipe, which is asynchronous on macOS.
-try {
-  process.exitCode = main(process.argv.slice(2))
-} catch (error) {
-  if (error instanceof UsageError) {
-    process.stderr.write(`token-heatmap: ${error.message}\n\n${USAGE}`)
-    process.exitCode = 2
-  } else {
-    process.stderr.write(`token-heatmap: ${messageOf(error)}\n`)
-    process.exitCode = 1
-  }
-}
+main(process.argv.slice(2)).then(
+  (code) => {
+    process.exitCode = code
+  },
+  (error: unknown) => {
+    if (error instanceof UsageError) {
+      process.stderr.write(`token-heatmap: ${error.message}\n\n${USAGE}`)
+      process.exitCode = 2
+    } else {
+      process.stderr.write(`token-heatmap: ${messageOf(error)}\n`)
+      process.exitCode = 1
+    }
+  },
+)

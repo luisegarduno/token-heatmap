@@ -1,21 +1,22 @@
 // src/cli.ts
-import { readFileSync } from "node:fs";
+import { readFileSync as readFileSync2 } from "node:fs";
 import { parseArgs } from "node:util";
 
-// src/levels.ts
-function cutoffs(totals) {
-  const active = totals.filter((t) => t > 0).sort((a, b) => a - b);
-  if (active.length === 0) return [];
-  const at = (p) => active[Math.max(0, Math.ceil(p * active.length) - 1)];
-  return [at(0.25), at(0.5), at(0.75)];
-}
-function levels(totals) {
-  const cuts = cutoffs(totals);
-  return totals.map((t) => t > 0 ? 1 + cuts.filter((c) => t > c).length : 0);
-}
+// src/providers/claude-code.ts
+import { readdir, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 // src/providers/provider.ts
 var TOKEN_TYPES = ["input", "output", "cache_write", "cache_read"];
+var NO_TOKENS = Object.freeze({ input: 0, output: 0, cache_write: 0, cache_read: 0 });
+var addTokens = (a, b) => ({
+  input: a.input + b.input,
+  output: a.output + b.output,
+  cache_write: a.cache_write + b.cache_write,
+  cache_read: a.cache_read + b.cache_read
+});
+var totalOf = (t) => t.input + t.output + t.cache_write + t.cache_read;
 
 // src/store.ts
 var LINE_KEYS = ["date", "provider", "machine", "tokens", "models"];
@@ -34,6 +35,24 @@ function isDate(text) {
   const date = new Date(Date.UTC(year, month - 1, day));
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
+var dayFormats = /* @__PURE__ */ new Map();
+function localDate(instant, timeZone) {
+  let format = dayFormats.get(timeZone);
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      calendar: "gregory",
+      numberingSystem: "latn",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    });
+    dayFormats.set(timeZone, format);
+  }
+  const parts = format.formatToParts(instant);
+  const part = (type) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${part("year").padStart(4, "0")}-${part("month")}-${part("day")}`;
+}
 function parseHistory(text) {
   const lines = [];
   const firstLine = /* @__PURE__ */ new Map();
@@ -47,7 +66,7 @@ function parseHistory(text) {
       throw new HistoryError(n, "not JSON");
     }
     const line = readLine(value, n);
-    const key = JSON.stringify([line.date, line.provider, line.machine]);
+    const key = keyOf(line);
     const earlier = firstLine.get(key);
     if (earlier !== void 0) {
       throw new HistoryError(
@@ -60,6 +79,53 @@ function parseHistory(text) {
   });
   return lines;
 }
+function formatHistory(lines) {
+  return [...lines].sort((a, b) => compare(a.date, b.date) || compare(a.provider, b.provider) || compare(a.machine, b.machine)).map(({ date, provider, machine, tokens, models }) => {
+    const line = { date, provider, machine, tokens: ordered(tokens) };
+    if (models) {
+      line.models = Object.fromEntries(
+        Object.entries(models).sort(([a], [b]) => compare(a, b)).map(([name, counts]) => [name, ordered(counts)])
+      );
+    }
+    return `${JSON.stringify(line)}
+`;
+  }).join("");
+}
+function merge(history, records, machine) {
+  const lines = [...history];
+  const index = new Map(lines.map((line, i) => [keyOf(line), i]));
+  for (const record of records) {
+    const recorded = record.models ? { date: record.date, provider: record.provider, machine, ...splitByModel(Object.entries(record.models)) } : { date: record.date, provider: record.provider, machine, tokens: ordered(record.tokens) };
+    const key = keyOf(recorded);
+    const i = index.get(key);
+    if (i === void 0) {
+      index.set(key, lines.length);
+      lines.push(recorded);
+    } else {
+      lines[i] = mergeLine(lines[i], recorded);
+    }
+  }
+  return lines;
+}
+function mergeLine(line, recorded) {
+  if (line.models && recorded.models) {
+    const models = new Map(Object.entries(line.models));
+    for (const [name, counts] of Object.entries(recorded.models)) {
+      const kept = models.get(name);
+      if (!kept || totalOf(counts) > totalOf(kept)) models.set(name, counts);
+    }
+    return { ...line, ...splitByModel([...models]) };
+  }
+  return totalOf(recorded.tokens) > totalOf(line.tokens) ? recorded : line;
+}
+function splitByModel(entries) {
+  return {
+    tokens: entries.reduce((sum, [, counts]) => addTokens(sum, counts), NO_TOKENS),
+    models: Object.fromEntries(entries.map(([name, counts]) => [name, ordered(counts)]))
+  };
+}
+var keyOf = (line) => JSON.stringify([line.date, line.provider, line.machine]);
+var compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 var ordered = (t) => ({
   input: t.input,
   output: t.output,
@@ -85,7 +151,7 @@ function readLine(value, n) {
       return [name, readTokens(counts, `models[${JSON.stringify(name)}]`, n)];
     })
   );
-  const sum = Object.values(line.models).reduce(add, { input: 0, output: 0, cache_write: 0, cache_read: 0 });
+  const sum = Object.values(line.models).reduce(addTokens, NO_TOKENS);
   for (const type of TOKEN_TYPES) {
     if (sum[type] !== line.tokens[type]) throw new HistoryError(n, `tokens.${type} is not the sum of models`);
   }
@@ -106,12 +172,119 @@ function readTokens(value, where, n) {
   }
   return ordered(value);
 }
-var add = (a, b) => ({
-  input: a.input + b.input,
-  output: a.output + b.output,
-  cache_write: a.cache_write + b.cache_write,
-  cache_read: a.cache_read + b.cache_read
-});
+
+// src/providers/claude-code.ts
+var CLAUDE_CODE = "claude-code";
+function claudeCode(opts = {}) {
+  return {
+    id: CLAUDE_CODE,
+    async collect({ timeZone }) {
+      const root = opts.root ?? join(homedir(), ".claude", "projects");
+      const responses = /* @__PURE__ */ new Map();
+      for (const file of await transcriptFiles(root)) {
+        const lines = (await readFile(file, "utf8")).split("\n");
+        lines.forEach((text, index) => {
+          if (text.trim() === "") return;
+          let value;
+          try {
+            value = JSON.parse(text);
+          } catch {
+            throw new Error(`${file}:${index + 1}: not JSON`);
+          }
+          const line = readAssistantLine(value);
+          if (!line) return;
+          const seen = responses.get(line.key);
+          if (!seen) {
+            responses.set(line.key, { model: line.model, usage: line.usage, first: line.time });
+            return;
+          }
+          if (totalOf(line.usage) > totalOf(seen.usage)) seen.usage = line.usage;
+          if (line.time < seen.first) seen.first = line.time;
+        });
+      }
+      return days(responses.values(), timeZone);
+    }
+  };
+}
+async function transcriptFiles(root) {
+  const files = [];
+  const walk = async (dir) => {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      if (dir === root && error.code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(path);
+    }
+  };
+  await walk(root);
+  return files.sort();
+}
+var isObject2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isCount = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+function readAssistantLine(value) {
+  if (!isObject2(value) || value.type !== "assistant") return void 0;
+  const { message, requestId, timestamp } = value;
+  if (!isObject2(message) || typeof requestId !== "string" || typeof timestamp !== "string") return void 0;
+  const { id, model, usage } = message;
+  if (typeof id !== "string" || typeof model !== "string" || model === "" || !isObject2(usage)) return void 0;
+  const time = Date.parse(timestamp);
+  if (Number.isNaN(time)) return void 0;
+  const { input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens } = usage;
+  if (!isCount(input_tokens) || !isCount(output_tokens) || !isCount(cache_creation_input_tokens) || !isCount(cache_read_input_tokens)) {
+    return void 0;
+  }
+  return {
+    key: JSON.stringify([id, requestId]),
+    model,
+    usage: {
+      input: input_tokens,
+      output: output_tokens,
+      cache_write: cache_creation_input_tokens,
+      cache_read: cache_read_input_tokens
+    },
+    time
+  };
+}
+function days(responses, timeZone) {
+  const byDay = /* @__PURE__ */ new Map();
+  for (const { model, usage, first } of responses) {
+    const date = localDate(new Date(first), timeZone);
+    let models = byDay.get(date);
+    if (!models) {
+      models = /* @__PURE__ */ new Map();
+      byDay.set(date, models);
+    }
+    models.set(model, addTokens(models.get(model) ?? NO_TOKENS, usage));
+  }
+  return [...byDay].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([date, models]) => ({
+    date,
+    provider: CLAUDE_CODE,
+    tokens: [...models.values()].reduce(addTokens, NO_TOKENS),
+    // Object.fromEntries makes each name an own key, so a name such as "__proto__" stays a name.
+    models: Object.fromEntries([...models].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))
+  }));
+}
+
+// src/providers/index.ts
+var providers = [claudeCode()];
+
+// src/levels.ts
+function cutoffs(totals) {
+  const active = totals.filter((t) => t > 0).sort((a, b) => a - b);
+  if (active.length === 0) return [];
+  const at = (p) => active[Math.max(0, Math.ceil(p * active.length) - 1)];
+  return [at(0.25), at(0.5), at(0.75)];
+}
+function levels(totals) {
+  const cuts = cutoffs(totals);
+  return totals.map((t) => t > 0 ? 1 + cuts.filter((c) => t > c).length : 0);
+}
 
 // src/render.ts
 var HISTORY = "token-heatmap/history.jsonl";
@@ -188,11 +361,11 @@ function monthRow(first, columns) {
   const month = (column) => dateOf(first + 7 * column).getUTCMonth();
   let row = image("gap-30x16");
   for (let c = 0; c < columns; ) {
-    let run = 1;
-    while (c + run < columns && month(c + run) === month(c)) run++;
-    if (run === 1) row += image("gap-14x16");
-    else row += image(MONTH_FILES[month(c)]) + (run > 2 ? image(`gap-${14 * (run - 2)}x16`) : "");
-    c += run;
+    let run2 = 1;
+    while (c + run2 < columns && month(c + run2) === month(c)) run2++;
+    if (run2 === 1) row += image("gap-14x16");
+    else row += image(MONTH_FILES[month(c)]) + (run2 > 2 ? image(`gap-${14 * (run2 - 2)}x16`) : "");
+    c += run2;
   }
   return row;
 }
@@ -224,21 +397,267 @@ function short(n, decimals) {
   return `${q / scale}.${String(q % scale).padStart(decimals, "0")}${letter}`;
 }
 
+// src/config.ts
+import { readFileSync } from "node:fs";
+import { join as join2 } from "node:path";
+var KEYS = ["repository", "timeZone", "machine", "models"];
+var ConfigError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ConfigError";
+  }
+};
+var configPath = (dataDir) => join2(dataDir, "config.json");
+function readConfig(dataDir) {
+  const path = configPath(dataDir);
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw new ConfigError(`${path} does not exist. Run /token-heatmap:setup in Claude Code first`);
+    }
+    throw new ConfigError(`cannot read ${path}: ${error.message}`);
+  }
+  const problem = (what) => new ConfigError(`${path}: ${what}`);
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw problem("not JSON");
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw problem("not a JSON object");
+  for (const key of Object.keys(value)) {
+    if (!KEYS.includes(key)) throw problem(`unknown key ${JSON.stringify(key)}`);
+  }
+  const { repository, timeZone, machine, models } = value;
+  if (typeof repository !== "string" || !/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(repository)) {
+    throw problem("repository is not a GitHub repository written USER/USER");
+  }
+  if (typeof timeZone !== "string" || !isTimeZone(timeZone)) {
+    throw problem("timeZone is not an IANA time zone such as America/Los_Angeles");
+  }
+  if (typeof machine !== "string" || !/^[a-z0-9]{1,32}$/.test(machine)) {
+    throw problem("machine is not an id of lowercase letters and digits");
+  }
+  if (typeof models !== "boolean") throw problem("models is not true or false");
+  return { repository, timeZone, machine, models };
+}
+function isTimeZone(zone) {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// src/publish/git-readme.ts
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join as join3 } from "node:path";
+var BOT = { name: "token-heatmap[bot]", email: "token-heatmap[bot]@users.noreply.github.com" };
+var COMMIT_MESSAGE = "Update token heatmap [skip ci]";
+var README = "README.md";
+var HISTORY2 = "token-heatmap/history.jsonl";
+async function publish(dataDir, update) {
+  const repo = join3(dataDir, "repo");
+  if (!existsSync(join3(repo, ".git"))) {
+    throw new Error(`${repo} is not a clone of the profile repository. Run /token-heatmap:setup in Claude Code first`);
+  }
+  const env = gitEnv();
+  const network = { ...env, GIT_TERMINAL_PROMPT: "0", ...await batchSsh(repo, env) };
+  const branch = await defaultBranch(repo, network);
+  for (let attempt = 1; ; attempt++) {
+    const base = await fetchBranch(repo, branch, network);
+    await git(repo, ["reset", "--quiet", "--hard", base], env);
+    const current = { history: await readAt(repo, base, HISTORY2, env), readme: await readAt(repo, base, README, env) };
+    const next = update(current);
+    if (next.history === current.history && next.readme === current.readme) return "unchanged";
+    mkdirSync(join3(repo, "token-heatmap"), { recursive: true });
+    writeFileSync(join3(repo, HISTORY2), next.history);
+    writeFileSync(join3(repo, README), next.readme);
+    await git(repo, ["add", "--force", "--", README, HISTORY2], env);
+    if ((await run(repo, ["diff", "--cached", "--quiet"], env)).code === 0) return "unchanged";
+    await git(
+      repo,
+      // No signing: a detached sync has no one to type a passphrase.
+      [
+        "-c",
+        `user.name=${BOT.name}`,
+        "-c",
+        `user.email=${BOT.email}`,
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "--message",
+        COMMIT_MESSAGE
+      ],
+      // The environment wins over any configuration, author.name and committer.email included.
+      {
+        ...env,
+        GIT_AUTHOR_NAME: BOT.name,
+        GIT_AUTHOR_EMAIL: BOT.email,
+        GIT_COMMITTER_NAME: BOT.name,
+        GIT_COMMITTER_EMAIL: BOT.email
+      }
+    );
+    if (await push(repo, branch, network)) return "pushed";
+    if (attempt === 2) {
+      throw new Error(
+        `the push to ${branch} was refused twice, because the profile repository changed while sync ran. Nothing was forced, and the next sync tries again`
+      );
+    }
+  }
+}
+async function defaultBranch(repo, env) {
+  const listed = await git(repo, ["ls-remote", "--symref", "origin", "HEAD"], env);
+  const match = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(listed);
+  if (!match) throw new Error("the profile repository has no default branch to publish to");
+  return match[1];
+}
+async function fetchBranch(repo, branch, env) {
+  const tracking = `refs/remotes/origin/${branch}`;
+  await git(repo, ["fetch", "--quiet", "--depth", "1", "--no-tags", "origin", `+refs/heads/${branch}:${tracking}`], env);
+  return (await git(repo, ["rev-parse", "--verify", "--quiet", `${tracking}^{commit}`], env)).trim();
+}
+async function readAt(repo, rev, path, env) {
+  if (await git(repo, ["ls-tree", "--name-only", rev, "--", path], env) === "") return "";
+  return git(repo, ["cat-file", "blob", `${rev}:${path}`], env);
+}
+async function push(repo, branch, env) {
+  const args = ["push", "--porcelain", "origin", `HEAD:refs/heads/${branch}`];
+  const result = await run(repo, args, env);
+  if (result.code === 0) return true;
+  if (/^!\t[^\t]*\t\[rejected\]/m.test(result.stdout)) return false;
+  const refused = result.stdout.split("\n").filter((line) => line.startsWith("!	"));
+  throw new GitError(args, { ...result, stderr: [result.stderr.trim(), ...refused].filter(Boolean).join("\n") });
+}
+async function batchSsh(repo, env) {
+  if (env.GIT_SSH_COMMAND) return { GIT_SSH_COMMAND: `${env.GIT_SSH_COMMAND} -o BatchMode=yes` };
+  if (env.GIT_SSH) return {};
+  const configured = await run(repo, ["config", "--get", "core.sshCommand"], env);
+  return { GIT_SSH_COMMAND: `${configured.code === 0 && configured.stdout.trim() || "ssh"} -o BatchMode=yes` };
+}
+function gitEnv() {
+  const env = { ...process.env, LC_ALL: "C" };
+  for (const name of [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX"
+  ]) {
+    delete env[name];
+  }
+  return env;
+}
+var GitError = class extends Error {
+  constructor(args, result) {
+    const command = args.find((arg, i) => !arg.startsWith("-") && args[i - 1] !== "-c") ?? "git";
+    super(`git ${command} failed: ${result.stderr.trim() || `exit code ${result.code}`}`);
+    this.name = "GitError";
+  }
+};
+async function git(repo, args, env) {
+  const result = await run(repo, args, env);
+  if (result.code !== 0) throw new GitError(args, result);
+  return result.stdout;
+}
+function run(repo, args, env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", ["-C", repo, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on("data", (chunk) => stdout.push(chunk));
+    child.stderr.on("data", (chunk) => stderr.push(chunk));
+    child.on("error", (error) => {
+      reject(error.code === "ENOENT" ? new Error("git was not found on PATH. Install git, then try again") : error);
+    });
+    child.on("close", (code) => {
+      resolve({
+        code: code ?? 1,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8")
+      });
+    });
+  });
+}
+
+// src/readme.ts
+var START = "<!-- token-heatmap:start -->";
+var END = "<!-- token-heatmap:end -->";
+var MarkersError = class extends Error {
+  constructor() {
+    super(`README.md has no "${START}" line followed by an "${END}" line, so the block has nowhere to go`);
+    this.name = "MarkersError";
+  }
+};
+function replaceBlock(readme, block) {
+  const start = readme.indexOf(START);
+  const end = start < 0 ? -1 : readme.indexOf(END, start + START.length);
+  if (end < 0) throw new MarkersError();
+  return `${readme.slice(0, start + START.length)}
+${block}
+${readme.slice(end)}`;
+}
+
+// src/sync.ts
+async function sync(opts) {
+  const config = readConfig(opts.dataDir);
+  const records = [];
+  for (const provider of opts.providers) {
+    for (const record of await provider.collect({ timeZone: config.timeZone })) {
+      if (record.provider !== provider.id) {
+        throw new Error(`provider ${provider.id} returned a day of ${JSON.stringify(record.provider)}`);
+      }
+      records.push(config.models ? record : { date: record.date, provider: record.provider, tokens: record.tokens });
+    }
+  }
+  const today = localDate(opts.now, config.timeZone);
+  return publish(opts.dataDir, (current) => {
+    let history;
+    try {
+      history = merge(parseHistory(current.history), records, config.machine);
+    } catch (error) {
+      throw new Error(`token-heatmap/history.jsonl in ${config.repository}: ${error.message}`);
+    }
+    const text = formatHistory(history);
+    try {
+      parseHistory(text);
+    } catch (error) {
+      throw new Error(`the history to publish cannot be read back: ${error.message}`);
+    }
+    return { history: text, readme: replaceBlock(current.readme, render(history, today)) };
+  });
+}
+
 // src/cli.ts
 var USAGE = `usage: token-heatmap render --history FILE [--today YYYY-MM-DD]
+       token-heatmap sync --foreground [--data-dir DIR]
 
 commands:
   render    print the README block for a history file
             --history FILE   the history.jsonl to draw
             --today DATE     the grid's last day; defaults to today on this machine
+  sync      count the transcripts, then push the history and the block to the profile
+            repository in one commit if a number changed; prints "pushed" or "unchanged"
+            --foreground     run in this process, until the push is done
+            --data-dir DIR   config.json and the clone; defaults to $CLAUDE_PLUGIN_DATA
 `;
 var UsageError = class extends Error {
 };
-function main(argv) {
+async function main(argv) {
   const [command, ...rest] = argv;
   switch (command) {
     case "render":
       return renderCommand(rest);
+    case "sync":
+      return syncCommand(rest);
     case "help":
     case "--help":
     case "-h":
@@ -259,7 +678,7 @@ function renderCommand(args) {
   if (!isDate(today)) throw new UsageError(`--today takes a day written YYYY-MM-DD, such as 2026-11-13, not ${today}`);
   let text;
   try {
-    text = readFileSync(values.history, "utf8");
+    text = readFileSync2(values.history, "utf8");
   } catch (error) {
     throw new Error(`cannot read ${values.history}: ${messageOf(error)}`);
   }
@@ -270,6 +689,17 @@ function renderCommand(args) {
     throw new Error(`${values.history}: ${messageOf(error)}`);
   }
   process.stdout.write(`${render(history, today)}
+`);
+  return 0;
+}
+async function syncCommand(args) {
+  const { values } = asUsage(
+    () => parseArgs({ args, options: { foreground: { type: "boolean" }, "data-dir": { type: "string" } }, strict: true })
+  );
+  if (!values.foreground) throw new UsageError("sync runs only with --foreground for now");
+  const dataDir = values["data-dir"] ?? process.env.CLAUDE_PLUGIN_DATA;
+  if (!dataDir) throw new UsageError("sync needs --data-dir DIR, or CLAUDE_PLUGIN_DATA set");
+  process.stdout.write(`${await sync({ dataDir, providers, now: /* @__PURE__ */ new Date() })}
 `);
   return 0;
 }
@@ -286,17 +716,20 @@ function localToday() {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 var messageOf = (error) => error instanceof Error ? error.message : String(error);
-try {
-  process.exitCode = main(process.argv.slice(2));
-} catch (error) {
-  if (error instanceof UsageError) {
-    process.stderr.write(`token-heatmap: ${error.message}
+main(process.argv.slice(2)).then(
+  (code) => {
+    process.exitCode = code;
+  },
+  (error) => {
+    if (error instanceof UsageError) {
+      process.stderr.write(`token-heatmap: ${error.message}
 
 ${USAGE}`);
-    process.exitCode = 2;
-  } else {
-    process.stderr.write(`token-heatmap: ${messageOf(error)}
+      process.exitCode = 2;
+    } else {
+      process.stderr.write(`token-heatmap: ${messageOf(error)}
 `);
-    process.exitCode = 1;
+      process.exitCode = 1;
+    }
   }
-}
+);

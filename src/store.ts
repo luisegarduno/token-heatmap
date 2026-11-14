@@ -3,9 +3,18 @@
 //   {"date":"2026-11-12","provider":"claude-code","machine":"k3f9a2","tokens":{…},"models":{"claude-opus-5-5":{…}}}
 //
 // `tokens` is the sum of `models`, and `models` is left out with `setup --no-models`. Every
-// count is a whole number, 0 or more.
+// count is a whole number, 0 or more. A recorded day never goes down: merge() replaces a count
+// only with a higher one, so the history outlives the transcripts it came from.
 
-import { type HistoryLine, TOKEN_TYPES, type Tokens } from "./providers/provider.ts"
+import {
+  addTokens,
+  type DayRecord,
+  type HistoryLine,
+  NO_TOKENS,
+  TOKEN_TYPES,
+  type Tokens,
+  totalOf,
+} from "./providers/provider.ts"
 
 const LINE_KEYS: readonly string[] = ["date", "provider", "machine", "tokens", "models"]
 
@@ -27,6 +36,27 @@ export function isDate(text: string): boolean {
   const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])]
   const date = new Date(Date.UTC(year, month - 1, day))
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
+const dayFormats = new Map<string, Intl.DateTimeFormat>()
+
+/** The day, YYYY-MM-DD, that `instant` falls on in an IANA time zone such as "America/Los_Angeles". */
+export function localDate(instant: Date, timeZone: string): string {
+  let format = dayFormats.get(timeZone)
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      calendar: "gregory",
+      numberingSystem: "latn",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+    dayFormats.set(timeZone, format)
+  }
+  const parts = format.formatToParts(instant)
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? ""
+  return `${part("year").padStart(4, "0")}-${part("month")}-${part("day")}`
 }
 
 /**
@@ -51,7 +81,7 @@ export function parseHistory(text: string): HistoryLine[] {
         throw new HistoryError(n, "not JSON")
       }
       const line = readLine(value, n)
-      const key = JSON.stringify([line.date, line.provider, line.machine])
+      const key = keyOf(line)
       const earlier = firstLine.get(key)
       if (earlier !== undefined) {
         throw new HistoryError(
@@ -86,6 +116,60 @@ export function formatHistory(lines: readonly HistoryLine[]): string {
     .join("")
 }
 
+/**
+ * Adds a collector's records to the history, as the lines of `machine`. A recorded day never
+ * goes down:
+ *
+ * - A record with `models` replaces a model's counts only with a higher total, and a model the
+ *   record lacks keeps its counts. `tokens` is then the sum of `models`.
+ * - A record without `models` (`setup --no-models`) replaces the line only with a higher total,
+ *   and its line holds only `tokens`. So does a record that meets a line of the other kind.
+ *
+ * Lines of other machines and other providers are left as they are, and neither argument is
+ * changed. A record's `tokens` is read only when it has no `models`.
+ */
+export function merge(history: readonly HistoryLine[], records: readonly DayRecord[], machine: string): HistoryLine[] {
+  const lines = [...history]
+  const index = new Map(lines.map((line, i) => [keyOf(line), i]))
+  for (const record of records) {
+    const recorded: HistoryLine = record.models
+      ? { date: record.date, provider: record.provider, machine, ...splitByModel(Object.entries(record.models)) }
+      : { date: record.date, provider: record.provider, machine, tokens: ordered(record.tokens) }
+    const key = keyOf(recorded)
+    const i = index.get(key)
+    if (i === undefined) {
+      index.set(key, lines.length)
+      lines.push(recorded)
+    } else {
+      lines[i] = mergeLine(lines[i], recorded)
+    }
+  }
+  return lines
+}
+
+function mergeLine(line: HistoryLine, recorded: HistoryLine): HistoryLine {
+  if (line.models && recorded.models) {
+    const models = new Map(Object.entries(line.models))
+    for (const [name, counts] of Object.entries(recorded.models)) {
+      const kept = models.get(name)
+      if (!kept || totalOf(counts) > totalOf(kept)) models.set(name, counts)
+    }
+    return { ...line, ...splitByModel([...models]) }
+  }
+  // One of the two has no split by model, so the whole day is compared.
+  return totalOf(recorded.tokens) > totalOf(line.tokens) ? recorded : line
+}
+
+/** `models` from name and counts pairs, and `tokens` as their sum. A name such as "__proto__" stays a name. */
+function splitByModel(entries: [string, Tokens][]): { tokens: Tokens; models: Record<string, Tokens> } {
+  return {
+    tokens: entries.reduce((sum, [, counts]) => addTokens(sum, counts), NO_TOKENS),
+    models: Object.fromEntries(entries.map(([name, counts]) => [name, ordered(counts)])),
+  }
+}
+
+const keyOf = (line: HistoryLine) => JSON.stringify([line.date, line.provider, line.machine])
+
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
 const ordered = (t: Tokens): Tokens => ({
@@ -118,7 +202,7 @@ function readLine(value: unknown, n: number): HistoryLine {
       return [name, readTokens(counts, `models[${JSON.stringify(name)}]`, n)]
     }),
   )
-  const sum = Object.values(line.models).reduce(add, { input: 0, output: 0, cache_write: 0, cache_read: 0 })
+  const sum = Object.values(line.models).reduce(addTokens, NO_TOKENS)
   for (const type of TOKEN_TYPES) {
     if (sum[type] !== line.tokens[type]) throw new HistoryError(n, `tokens.${type} is not the sum of models`)
   }
@@ -140,10 +224,3 @@ function readTokens(value: unknown, where: string, n: number): Tokens {
   }
   return ordered(value as Tokens)
 }
-
-const add = (a: Tokens, b: Tokens): Tokens => ({
-  input: a.input + b.input,
-  output: a.output + b.output,
-  cache_write: a.cache_write + b.cache_write,
-  cache_read: a.cache_read + b.cache_read,
-})
