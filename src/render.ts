@@ -4,15 +4,16 @@
 // The block is the one Phase 1 put on a real profile (test/fixtures/block.html), and each rule
 // below was measured there:
 //
-// - Every image sits in its own link with tabindex="-1". GitHub wraps a bare README image in a
-//   link of its own, and Tab would stop on it. Only a day cell has a title, which a desktop
-//   browser shows as the tooltip.
+// - Every image sits in its own <a name="token-heatmap">, with no href. GitHub wraps a bare
+//   README image in a link to the image file, and leaves one inside an <a> alone, so a click on
+//   the block goes nowhere and Tab does not stop on it. Only a day cell has a title, which a
+//   desktop browser shows as the tooltip on hover.
 // - The images of a row touch in the source. A line break goes inside a tag, as in "<br\n>";
 //   between two tags it would show as a gap.
 // - GitHub adds `height: auto` to a README image that has a height, so each image's width and
 //   height are those of its file in plugin/assets/.
-// - Only tags and attributes GitHub keeps: table, tr, td nowrap, b, br, kbd, a href title
-//   tabindex, img src width height hspace align alt.
+// - Only tags and attributes GitHub keeps: table align, tr, td nowrap, b, br, kbd, a name title,
+//   img src width height hspace align alt.
 //
 // Nothing from the history but numbers reaches the block, so nothing in it needs escaping.
 
@@ -20,8 +21,8 @@ import { levels } from "./levels.ts"
 import type { HistoryLine, Tokens } from "./providers/provider.ts"
 import { isDate } from "./store.ts"
 
-/** Where every cell links: the history file beside the images in the profile repository. */
-const HISTORY = "token-heatmap/history.jsonl"
+/** The name of every image's <a>: an anchor with no href, so that GitHub does not link the image. */
+const ANCHOR = "token-heatmap"
 
 const MONTHS = [
   "January",
@@ -106,7 +107,7 @@ function image(file: string, title?: string, hspace?: number): string {
   if (!size) throw new Error(`the block has no image ${file}.svg`)
   const [width, height] = size
   return (
-    `<a href="${HISTORY}"${title ? ` title="${title}"` : ""} tabindex="-1">` +
+    `<a name="${ANCHOR}"${title ? ` title="${title}"` : ""}>` +
     `<img src="token-heatmap/${file}.svg" width="${width}" height="${height}"${hspace ? ` hspace="${hspace}"` : ""} align="top" alt=""></a>`
   )
 }

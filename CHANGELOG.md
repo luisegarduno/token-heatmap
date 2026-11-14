@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- A click on the heatmap does nothing. Each square used to link to `token-heatmap/history.jsonl`; the tooltip still shows on hover. A profile shows the change once the plugin is updated and its next sync pushes.
+
 ## 0.2.0 - 2026-11-14
 
 ### Added
