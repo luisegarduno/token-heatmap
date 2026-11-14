@@ -1,0 +1,29 @@
+name: Feature request
+description: Something token-heatmap could do, such as a collector for another tool
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        token-heatmap stays free, needs no server and no account beyond GitHub, and publishes only daily token counts. The README's "What leaves your machine" lists the exact fields. A request that would publish more, or need a hosted service, is welcome too: say why it is worth it.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to do
+      description: The problem or the use, before any solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: How token-heatmap could do it. For another tool's collector, see docs/providers.md, and say where that tool records its usage.
+  - type: textarea
+    id: published
+    attributes:
+      label: Does it change what leaves the machine?
+      description: Any field, file or commit that would be pushed to the profile repository and is not pushed today.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you have considered

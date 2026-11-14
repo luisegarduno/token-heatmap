@@ -6,6 +6,8 @@
 // the first push, and sync each one after it. The test then reads what reached it, every object
 // git holds there and not only the files at the tip, and fails on any other key or any of the
 // planted strings. Every value is made up.
+//
+// The list itself is in test/published.ts, and test/docs.test.ts holds README.md to the same list.
 
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
@@ -30,10 +32,8 @@ import {
   README,
   transcripts,
 } from "./helpers.ts"
+import { COUNT_KEYS, LINE_KEYS, MODEL_RULE, OTHER_MODEL } from "./published.ts"
 
-/** The rule for a published model name, written out here, not imported, so that the test checks the collector. */
-const MODEL_RULE = /^[A-Za-z0-9._:@-]{1,64}$/
-const COUNTS = ["input", "output", "cache_write", "cache_read"]
 const HISTORY = "token-heatmap/history.jsonl"
 
 /** Noon on November 13th in Los Angeles, the zone in CONFIG. */
@@ -247,18 +247,21 @@ for (const via of ["sync", "setup"] as const) {
       // history.jsonl: the listed keys, and nothing else.
       const history = profile.file(HISTORY) ?? ""
       const counts = (value: unknown, where: string) => {
-        assert.deepEqual(Object.keys(value as object), COUNTS, where)
+        assert.deepEqual(Object.keys(value as object), COUNT_KEYS, where)
         for (const count of Object.values(value as object)) assert.ok(Number.isSafeInteger(count) && count >= 0, where)
       }
       for (const text of history.trimEnd().split("\n")) {
         const line = JSON.parse(text)
-        assert.deepEqual(Object.keys(line), ["date", "provider", "machine", "tokens", ...(models ? ["models"] : [])])
+        assert.deepEqual(
+          Object.keys(line),
+          LINE_KEYS.filter((key) => models || key !== "models"),
+        )
         assert.match(line.date, /^\d{4}-\d{2}-\d{2}$/)
         assert.equal(line.provider, "claude-code")
         assert.equal(line.machine, machine)
         counts(line.tokens, "tokens")
         for (const [name, value] of Object.entries(line.models ?? {})) {
-          assert.ok(MODEL_RULE.test(name) || name === "other", `model name ${JSON.stringify(name)}`)
+          assert.ok(MODEL_RULE.test(name) || name === OTHER_MODEL, `model name ${JSON.stringify(name)}`)
           counts(value, `models[${JSON.stringify(name)}]`)
         }
       }

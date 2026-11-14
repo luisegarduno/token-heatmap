@@ -1,0 +1,63 @@
+name: Bug report
+description: Something token-heatmap does wrong, or a message whose fix does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please check the README's [Fixes](https://github.com/luisegarduno/token-heatmap#fixes) first.
+
+        This issue is public. Do not paste transcripts, prompts, file paths or anything else from `~/.claude`. If the bug publishes something it should not, or is a security problem, report it privately instead: see [SECURITY.md](https://github.com/luisegarduno/token-heatmap/security/policy).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and any message as printed.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The commands or Claude Code actions that lead to it, starting from a known state.
+      placeholder: |
+        1. /token-heatmap:setup octocat
+        2. ...
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of /token-heatmap:status
+      description: It names your profile repository and your machine id, which your public history.jsonl holds already. Remove anything you would rather not share.
+      render: text
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where Claude Code runs
+      multiple: true
+      options:
+        - CLI
+        - Desktop app
+        - Agent SDK
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 26.1, Ubuntu 24.04, Windows 11
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: token-heatmap (from `claude plugin list`), Claude Code (`claude --version`), Node.js (`node --version`) and git (`git --version`).
+      placeholder: token-heatmap 0.1.0, Claude Code 2.1.0, Node.js v22.0.0, git 2.50.0
+    validations:
+      required: true

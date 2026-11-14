@@ -1,0 +1,29 @@
+# Version updates for the dev tools in package.json and for the actions in .github/workflows.
+# The plugin has no runtime dependencies: users receive plugin/ only, with one bundled file.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      # The types follow the oldest Node.js the plugin supports, 20, so that the code uses no newer API.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    groups:
+      dev-tools:
+        dependency-type: development
+        update-types: [minor, patch]
+    commit-message:
+      prefix: chore(deps)
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: chore(ci)
