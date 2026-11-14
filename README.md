@@ -121,7 +121,7 @@ The heatmap in your README is drawn from `history.jsonl` alone: its total and it
 
 Nothing else leaves: no prompts, replies or code, no file paths, project or branch names, no session or request ids, no transcripts. A test, [`test/published-fields.test.ts`](test/published-fields.test.ts), plants such strings in made-up transcripts, syncs them into a repository on disk, and fails if anything but the fields above, or any planted string, reaches any object in it. Another, [`test/docs.test.ts`](test/docs.test.ts), fails if this table and the test's list differ.
 
-Everything is public once pushed, because a profile repository is public, and it stays in that repository's git history.
+Everything is public once pushed, because a profile repository is public, and it stays in that repository's git history. The [privacy policy](PRIVACY.md) says the same, with how long each thing is kept.
 
 ## The history file
 
@@ -181,7 +181,7 @@ If you install it again later, setup finds your old machine id in `history.jsonl
 
 ## Contributing
 
-[CONTRIBUTING.md](CONTRIBUTING.md) says how to build, test and propose a change, and [docs/providers.md](docs/providers.md) how to add a collector for another tool. Everyone who takes part follows the [code of conduct](CODE_OF_CONDUCT.md). Report a security problem privately, as [SECURITY.md](SECURITY.md) says. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+[CONTRIBUTING.md](CONTRIBUTING.md) says how to build, test and propose a change, and [docs/providers.md](docs/providers.md) how to add a collector for another tool. Everyone who takes part follows the [code of conduct](CODE_OF_CONDUCT.md). Report a security problem privately, as [SECURITY.md](SECURITY.md) says. Changes are listed in [CHANGELOG.md](CHANGELOG.md), and what the plugin collects in the [privacy policy](PRIVACY.md).
 
 ## License
 

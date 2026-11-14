@@ -36,16 +36,44 @@ function firstColumn(markdown: string): string[] {
 
 const codeSpans = (text: string) => [...text.matchAll(/`([^`]+)`/g)].map((match) => match[1])
 
-test("the README lists exactly the fields that published-fields.test.ts lets leave the machine", () => {
-  const listed = firstColumn(section(README, "What leaves your machine")).flatMap(codeSpans)
-  assert.equal(new Set(listed).size, listed.length, `a field listed twice: ${listed.join(", ")}`)
-  assert.deepEqual([...listed].sort(), [...LINE_KEYS, ...COUNT_KEYS].sort())
-})
+// README.md, the plugin folder's own README (the plugin directory's listing) and the privacy policy
+// each say what leaves the machine, under the same heading.
+const FIELD_DOCS = ["README.md", "plugin/README.md", "PRIVACY.md"]
 
-test("the README gives the rule for a published model name, and where the others go", () => {
-  const text = section(README, "What leaves your machine")
-  assert.ok(text.includes(`\`${MODEL_RULE.source}\``), `the rule ${MODEL_RULE.source}`)
-  assert.ok(text.includes(`\`${OTHER_MODEL}\``), `"${OTHER_MODEL}"`)
+for (const doc of FIELD_DOCS) {
+  test(`${doc} lists exactly the fields that published-fields.test.ts lets leave the machine`, () => {
+    const listed = firstColumn(section(read(doc), "What leaves your machine")).flatMap(codeSpans)
+    assert.equal(new Set(listed).size, listed.length, `a field listed twice: ${listed.join(", ")}`)
+    assert.deepEqual([...listed].sort(), [...LINE_KEYS, ...COUNT_KEYS].sort())
+  })
+
+  test(`${doc} gives the rule for a published model name, and where the others go`, () => {
+    const text = section(read(doc), "What leaves your machine")
+    assert.ok(text.includes(`\`${MODEL_RULE.source}\``), `the rule ${MODEL_RULE.source}`)
+    assert.ok(text.includes(`\`${OTHER_MODEL}\``), `"${OTHER_MODEL}"`)
+  })
+}
+
+test("the plugin folder's README names every hook command and the plugin's commands", () => {
+  const text = read("plugin/README.md")
+  const hooks = json("plugin/hooks/hooks.json").hooks as Record<string, { hooks: { command: string }[] }[]>
+  for (const [event, groups] of Object.entries(hooks)) {
+    assert.ok(text.includes(`\`${event}\``), event)
+    for (const { command } of groups.flatMap((group) => group.hooks)) {
+      assert.ok(text.includes(command.replace(/--trigger \w+$/, "--trigger EVENT")), command)
+    }
+  }
+  const plugin = json("plugin/.claude-plugin/plugin.json")
+  const marketplace = json(".claude-plugin/marketplace.json")
+  for (const command of [
+    `/${plugin.name}:setup`,
+    `/${plugin.name}:status`,
+    `claude plugin uninstall ${plugin.name}@${marketplace.name}`,
+  ]) {
+    assert.ok(text.includes(command), command)
+  }
+  // The listing is shown away from this repository, so its links are absolute.
+  for (const [, target] of text.matchAll(/\]\(([^)\s]+)\)/g)) assert.match(target, /^https:\/\//, target)
 })
 
 test("the README's example history line reads back, and is written as token-heatmap writes it", () => {
@@ -107,7 +135,9 @@ test("every relative link in the docs leads to a file or a heading that exists",
     "CODE_OF_CONDUCT.md",
     "SECURITY.md",
     "CHANGELOG.md",
+    "PRIVACY.md",
     "docs/providers.md",
+    "plugin/README.md",
   ]
   for (const doc of docs) {
     const text = read(doc)
