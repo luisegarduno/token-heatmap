@@ -424,7 +424,7 @@ function levels(totals) {
 }
 
 // src/render.ts
-var HISTORY = "token-heatmap/history.jsonl";
+var ANCHOR = "token-heatmap";
 var MONTHS = [
   "January",
   "February",
@@ -493,7 +493,7 @@ function image(file, title, hspace) {
   const size = IMAGES.get(file);
   if (!size) throw new Error(`the block has no image ${file}.svg`);
   const [width, height] = size;
-  return `<a href="${HISTORY}"${title ? ` title="${title}"` : ""} tabindex="-1"><img src="token-heatmap/${file}.svg" width="${width}" height="${height}"${hspace ? ` hspace="${hspace}"` : ""} align="top" alt=""></a>`;
+  return `<a name="${ANCHOR}"${title ? ` title="${title}"` : ""}><img src="token-heatmap/${file}.svg" width="${width}" height="${height}"${hspace ? ` hspace="${hspace}"` : ""} align="top" alt=""></a>`;
 }
 function monthRow(first, columns) {
   const month = (column) => dateOf(first + 7 * column).getUTCMonth();
@@ -547,7 +547,7 @@ var BOT = { name: "token-heatmap[bot]", email: "token-heatmap[bot]@users.noreply
 var COMMIT_MESSAGE = "Update token heatmap [skip ci]";
 var README = "README.md";
 var FOLDER = "token-heatmap";
-var HISTORY2 = `${FOLDER}/history.jsonl`;
+var HISTORY = `${FOLDER}/history.jsonl`;
 var addresses = (repository) => ({ https: `https://github.com/${repository}.git`, ssh: `git@github.com:${repository}.git` });
 function isAddressOf(url, repository) {
   const name = repository.toLowerCase();
@@ -607,16 +607,16 @@ async function publish(dataDir, update, opts = {}) {
   for (let attempt = 1; ; attempt++) {
     const base = await fetchBranch(repo, branch, network);
     await git(repo, ["reset", "--quiet", "--hard", base], env);
-    const current = { history: await readAt(repo, base, HISTORY2, env), readme: await readAt(repo, base, README, env) };
+    const current = { history: await readAt(repo, base, HISTORY, env), readme: await readAt(repo, base, README, env) };
     const next = update(current);
     if (images.length === 0 && next.history === current.history && next.readme === current.readme) return "unchanged";
     let pushed;
     try {
       mkdirSync2(join3(repo, FOLDER), { recursive: true });
-      writeFileSync2(join3(repo, HISTORY2), next.history);
+      writeFileSync2(join3(repo, HISTORY), next.history);
       writeFileSync2(join3(repo, README), next.readme);
       for (const [name, bytes] of images) writeFileSync2(join3(repo, FOLDER, name), bytes);
-      const paths = [README, HISTORY2, ...images.map(([name]) => `${FOLDER}/${name}`)];
+      const paths = [README, HISTORY, ...images.map(([name]) => `${FOLDER}/${name}`)];
       await git(repo, ["add", "--force", "--", ...paths], env);
       if ((await run(repo, ["diff", "--cached", "--quiet"], env)).code === 0) {
         await git(repo, ["reset", "--quiet", "--hard", base], env);

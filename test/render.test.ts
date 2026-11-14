@@ -44,7 +44,7 @@ type Image = { file: string; width: number; height: number; hspace: number; titl
 type Cell = { level: number; title: string }
 
 const LINK =
-  /<a href="token-heatmap\/history\.jsonl"(?: title="([^"]*)")? tabindex="-1"><img src="token-heatmap\/([a-z0-9-]+)\.svg" width="(\d+)" height="(\d+)"(?: hspace="(\d+)")? align="top" alt=""><\/a>/g
+  /<a name="token-heatmap"(?: title="([^"]*)")?><img src="token-heatmap\/([a-z0-9-]+)\.svg" width="(\d+)" height="(\d+)"(?: hspace="(\d+)")? align="top" alt=""><\/a>/g
 const FRAME =
   /^<table align="center"><tr><td nowrap>\n(<b>[^<]*<\/b> Claude Code tokens? in the last year)<br>\n<kbd>(.*)<\/kbd>\n<\/td><\/tr><\/table>$/s
 const WEEKDAY_LABELS = ["gap-30x14", "mon", "gap-30x14", "wed", "gap-30x14", "fri", "gap-30x14"]
@@ -126,7 +126,9 @@ function monthRowFor(firstSunday: number): string[] {
 }
 
 // GitHub kept these in Phase 1's test, and removed `style`, `class`, inline <svg> and data:
-// addresses. `hspace` was measured there too, and `align` on <table> on 2026-11-14.
+// addresses. `hspace` was measured there too, `align` on <table> on 2026-11-14, and `name` on an
+// <a> with no href, through GitHub's Markdown API, on 2026-11-14: it keeps the <a> and its title,
+// and does not wrap the image in a link to itself.
 const KEPT: Record<string, readonly string[]> = {
   table: ["align"],
   tr: [],
@@ -134,7 +136,7 @@ const KEPT: Record<string, readonly string[]> = {
   b: [],
   br: [],
   kbd: [],
-  a: ["href", "title", "tabindex"],
+  a: ["name", "title"],
   img: ["src", "width", "height", "hspace", "align", "alt"],
 }
 
