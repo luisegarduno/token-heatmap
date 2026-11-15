@@ -1,6 +1,6 @@
 {
   "name": "token-heatmap",
-  "version": "0.2.1",
+  "version": "1.0.0",
   "private": true,
   "description": "A heatmap of your daily Claude Code token usage in your GitHub profile README",
   "license": "GPL-3.0-only",

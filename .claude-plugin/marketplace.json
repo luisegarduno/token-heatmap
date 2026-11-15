@@ -11,7 +11,7 @@
       "name": "token-heatmap",
       "source": "./plugin",
       "description": "A heatmap of your daily Claude Code token usage in your GitHub profile README",
-      "version": "0.2.1"
+      "version": "1.0.0"
     }
   ]
 }
