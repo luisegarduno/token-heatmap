@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-15
+
+The first stable release. The code is the same as in 0.2.1.
+
 ## 0.2.1 - 2026-11-14
 
 ### Changed
@@ -27,4 +31,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Tests that fail if anything but the listed fields reaches the profile repository, or if the README lists other fields.
 - The README, a contributing guide, a code of conduct, a security policy, issue and pull request templates, Dependabot, and CI on Ubuntu and macOS with Node.js 20, 22 and 24, with the unit tests on Windows.
 
-[Unreleased]: https://github.com/luisegarduno/token-heatmap/commits/main
+[Unreleased]: https://github.com/luisegarduno/token-heatmap/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/luisegarduno/token-heatmap/releases/tag/v1.0.0
