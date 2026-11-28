@@ -22,7 +22,7 @@
     "check": "npm run lint && npm run typecheck && npm run build && npm test && git diff --exit-code plugin/dist"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.8",
+    "@biomejs/biome": "2.6.9",
     "@types/node": "20.19.43",
     "esbuild": "0.28.2",
     "tsx": "4.23.15",
